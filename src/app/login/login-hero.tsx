@@ -1,89 +1,85 @@
 import Image from "next/image"
-import { LoginHeroScene } from "@/app/login/login-hero-scene"
 
-const ICON_SRC = "/branding/zonemaestro-icon.jpg"
-
-/** Illustrative example zones — the same kind of static, presentational
- * mock content this login screen has always used (never live data; the
- * real zone list only exists behind auth). Wording/status vocabulary
- * ("live"/"hold") matches the reference screenshot, not the app's own
- * ZonePlaybackState enum. */
+/** Illustrative example zones — static, presentational mock content (this
+ * login screen has never shown live data; the real zone list only exists
+ * behind auth). Copy/status vocabulary matches the reference exactly. */
 const HERO_ZONES = [
-  { name: "Dining Room", status: "live" as const },
-  { name: "The Bar", status: "live" as const },
-  { name: "Kitchen", status: "hold" as const },
-  { name: "Terrace", status: "offline" as const },
+  { name: "Dining Room", status: "live", color: "#4ade80" },
+  { name: "The Bar", status: "live", color: "#4ade80" },
+  { name: "Kitchen", status: "hold", color: "#fbbf24" },
+  { name: "Terrace", status: "offline", color: "#9ca3af" },
 ]
 
-const STATUS_DOT: Record<string, string> = {
-  live: "bg-emerald-400",
-  hold: "bg-amber-400",
-  offline: "bg-white/30",
-}
-
-export function LoginHero({
-  /** Real venue photo, once available — swap this one prop in and the
-   * placeholder gradient below is gone. Nothing else about this
-   * component changes. */
-  photoSrc,
-}: {
-  photoSrc?: string
-}) {
+export function LoginHero() {
   return (
-    <div className="login-form-enter relative h-[42vh] w-full overflow-hidden lg:h-auto lg:w-[70%]">
-      {photoSrc ? (
-        <Image src={photoSrc} alt="" fill priority sizes="70vw" className="object-cover" />
-      ) : (
-        // PLACEHOLDER — no real venue photo has been supplied yet (see
-        // chat: no tool in this environment can pull pixel data out of a
-        // chat-attached image onto this server's filesystem). An
-        // atmospheric SVG scene, not a photo — see login-hero-scene.tsx.
-        // Replace by passing `photoSrc` from page.tsx once a real photo
-        // reaches this server; everything else on this panel is final.
-        <LoginHeroScene />
-      )}
+    <section className="login-form-enter relative hidden min-h-screen overflow-hidden lg:block lg:w-[70%]">
+      <Image
+        src="/branding/login-hero-scene.jpg"
+        alt="Dark luxury audio lounge interior"
+        fill
+        priority
+        sizes="70vw"
+        className="object-cover"
+        style={{ objectPosition: "58% 50%" }}
+      />
 
-      {/* Cinematic overlay — darkens the photo so type stays readable at
-          every corner it appears in, independent of what the photo is. */}
+      {/* Cinematic overlay — matches the reference exactly: a vertical
+          darken (heavier at the bottom, where the headline sits) plus a
+          gentle horizontal one from the left. */}
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/70 via-black/35 to-black/80"
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            "linear-gradient(180deg, rgba(2,4,6,0.62) 0%, rgba(2,4,6,0.26) 38%, rgba(2,4,6,0.88) 100%), linear-gradient(90deg, rgba(2,4,6,0.44) 0%, rgba(2,4,6,0.08) 58%, rgba(2,4,6,0.28) 100%)",
+        }}
       />
-      <div aria-hidden className="pointer-events-none absolute inset-0 bg-black/20" />
 
-      {/* Top-left: icon mark + tracked caps caption */}
-      <div className="relative flex items-center gap-3 p-8 xl:p-12">
-        <Image src={ICON_SRC} alt="ZoneMaestro" width={56} height={56} priority className="size-10 rounded-md xl:size-12" />
-        <p className="text-[11px] leading-tight font-semibold tracking-[0.22em] text-white/90 uppercase">
-          Precision Audio
-          <br />
-          Orchestration
-        </p>
+      {/* Top-left: icon + "Precision Audio Orchestration" lockup, baked
+          into the one asset — screen-blended so its black background
+          disappears into the page. */}
+      <div className="absolute top-0 left-0 p-10">
+        <Image
+          src="/branding/login-mark.jpg"
+          alt="ZoneMaestro — Precision Audio Orchestration"
+          width={300}
+          height={300}
+          priority
+          draggable={false}
+          className="w-[180px] mix-blend-screen contrast-125 [filter:drop-shadow(0_8px_22px_rgba(0,0,0,0.5))] select-none xl:w-[220px]"
+        />
       </div>
 
-      {/* Center: large metallic/glass wordmark */}
-      <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-8">
-        <h1
-          className="bg-gradient-to-b from-white via-slate-300 to-slate-500 bg-clip-text text-center text-6xl leading-none font-bold tracking-tight text-transparent xl:text-8xl"
-          style={{ filter: "drop-shadow(0 4px 24px rgba(94,200,247,0.18))" }}
-        >
-          ZoneMaestro
+      {/* Center-left: the wordmark. Source art is dark text on a light
+          card — inverted + hue-rotated back to blue-gray, then
+          screen-blended, so only the lettering composites onto the photo. */}
+      <div className="absolute top-1/2 left-10 -translate-y-1/2">
+        <Image
+          src="/branding/login-wordmark.png"
+          alt="ZoneMaestro"
+          width={844}
+          height={198}
+          priority
+          draggable={false}
+          className="w-[min(60vw,900px)] mix-blend-screen select-none [filter:invert(1)_hue-rotate(180deg)_contrast(1.15)]"
+        />
+      </div>
+
+      {/* Bottom-left: headline + illustrative zone status row. */}
+      <div className="absolute bottom-0 left-0 max-w-2xl p-10">
+        <h1 className="text-[2.75rem] leading-[1.08] font-bold tracking-tight whitespace-nowrap text-white">
+          Music that moves with your space
         </h1>
-      </div>
-
-      {/* Bottom-left: tagline + illustrative zone status row */}
-      <div className="relative flex flex-col gap-4 p-8 xl:p-12">
-        <p className="text-2xl font-semibold text-white xl:text-3xl">Music that moves with your space</p>
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+        <div className="mt-8 flex flex-wrap items-center gap-x-7 gap-y-3">
           {HERO_ZONES.map((z) => (
-            <span key={z.name} className="flex items-center gap-1.5 text-sm">
-              <span aria-hidden className={`size-2 rounded-full ${STATUS_DOT[z.status]}`} />
+            <div key={z.name} className="flex items-center gap-2 text-[13px]">
+              <span aria-hidden className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: z.color }} />
               <span className="font-medium text-white">{z.name}</span>
-              <span className="text-white/50">{z.status}</span>
-            </span>
+              <span className="text-gray-400">{z.status}</span>
+            </div>
           ))}
         </div>
       </div>
-    </div>
+    </section>
   )
 }

@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import Image from "next/image"
 import Link from "next/link"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
@@ -22,11 +23,6 @@ import { isMockMode } from "@/lib/config"
 import { DEMO_CREDENTIALS, DEMO_PASSWORD } from "@/lib/mock/seed"
 import { cn } from "@/lib/utils"
 import { LoginHero } from "@/app/login/login-hero"
-
-// No real venue photo has been supplied yet — see chat. Pass its path
-// here the moment one lands under public/, e.g. "/branding/zonemaestro-venue-bg.jpg".
-// Nothing else on the page changes.
-const HERO_PHOTO_SRC: string | undefined = undefined
 
 const schema = z.object({
   email: z.string().min(1, "Email is required").email("Enter a valid email address"),
@@ -55,44 +51,53 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-[#0b0d10] lg:flex-row">
-      <LoginHero photoSrc={HERO_PHOTO_SRC} />
+    <div className="grid min-h-screen bg-[#111111] text-white lg:grid-cols-[7fr_3fr]">
+      <LoginHero />
 
-      {/* `dark` scopes shadcn's dark token set (Alert, FormMessage, Form
-          error states) to just this panel, without a global theme toggle —
-          otherwise Alert's destructive variant renders a white box (its
-          `bg-card` reads the app's default light `:root` tokens). */}
-      <div className="dark flex flex-1 items-center justify-center bg-[#101215] p-6 sm:p-10 lg:w-[30%]">
-        <div className="login-form-enter w-full max-w-sm space-y-6">
-          <div className="space-y-1.5">
-            <h2 className="text-2xl font-bold tracking-tight text-white">Sign in</h2>
-            <p className="text-sm text-white/50">Group operators and venue administrators.</p>
+      {/* `dark` scopes shadcn's dark token set to this panel (Alert,
+          FormMessage) — otherwise Alert's destructive variant reads the
+          app's light :root tokens and renders a white box. */}
+      <section className="dark flex min-h-screen items-center justify-center bg-[#111111] px-6 py-12 sm:px-10">
+        <div className="login-form-enter w-full max-w-sm">
+          <div className="mb-10 lg:hidden">
+            <Image
+              src="/branding/login-mark.jpg"
+              alt="ZoneMaestro — Precision Audio Orchestration"
+              width={300}
+              height={300}
+              priority
+              className="w-[140px] mix-blend-screen contrast-125 select-none"
+            />
           </div>
+
+          <h2 className="text-[1.9rem] leading-tight font-bold text-white">Sign in</h2>
+          <p className="mt-1.5 text-[14px] text-gray-400">Group operators and venue administrators.</p>
 
           <Form {...form}>
             <form
               onSubmit={form.handleSubmit(onSubmit)}
-              className={cn("space-y-4", loginError && "login-error-shake")}
+              className={cn("mt-7 space-y-5", loginError && "login-error-shake")}
             >
               {loginError && (
-                <Alert variant="destructive">
-                  <AlertDescription>{loginError.message}</AlertDescription>
+                <Alert variant="destructive" className="border-red-500/30 bg-red-500/10">
+                  <AlertDescription className="text-[13px] text-red-300">{loginError.message}</AlertDescription>
                 </Alert>
               )}
+
               <FormField
                 control={form.control}
                 name="email"
                 render={({ field }) => (
-                  <FormItem>
-                    <FormLabel className="text-sm text-white/70">Email</FormLabel>
+                  <FormItem className="space-y-2">
+                    <FormLabel className="text-[13px] font-medium text-gray-400">Email</FormLabel>
                     <FormControl>
                       <div className="relative">
-                        <Mail className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-white/35" />
+                        <Mail className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-gray-500" />
                         <Input
                           placeholder="ops@group.example"
                           autoComplete="email"
                           autoFocus
-                          className="h-12 rounded-[10px] border-white/10 bg-white/[0.04] pl-10 text-base text-white placeholder:text-white/30 focus-visible:border-[#5ec8f7] focus-visible:ring-[#5ec8f7]/40"
+                          className="h-11 rounded-md border-[#262626] bg-[#181818] pl-10 text-[15px] text-white placeholder:text-gray-600 focus-visible:border-[#34b4f5] focus-visible:ring-[#34b4f5]/30"
                           {...field}
                         />
                       </div>
@@ -101,19 +106,21 @@ export default function LoginPage() {
                   </FormItem>
                 )}
               />
+
               <FormField
                 control={form.control}
                 name="password"
                 render={({ field }) => (
-                  <FormItem>
-                    <FormLabel className="text-sm text-white/70">Password</FormLabel>
+                  <FormItem className="space-y-2">
+                    <FormLabel className="text-[13px] font-medium text-gray-400">Password</FormLabel>
                     <FormControl>
                       <div className="relative">
-                        <Lock className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-white/35" />
+                        <Lock className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-gray-500" />
                         <Input
                           type={showPassword ? "text" : "password"}
                           autoComplete="current-password"
-                          className="h-12 rounded-[10px] border-white/10 bg-white/[0.04] pr-11 pl-10 text-base text-white placeholder:text-white/30 focus-visible:border-[#5ec8f7] focus-visible:ring-[#5ec8f7]/40"
+                          placeholder="••••••••••"
+                          className="h-11 rounded-md border-[#262626] bg-[#181818] pr-11 pl-10 text-[15px] text-white placeholder:text-gray-600 focus-visible:border-[#34b4f5] focus-visible:ring-[#34b4f5]/30"
                           {...field}
                         />
                         <button
@@ -121,9 +128,10 @@ export default function LoginPage() {
                           onClick={() => setShowPassword((v) => !v)}
                           aria-label={showPassword ? "Hide password" : "Show password"}
                           aria-pressed={showPassword}
-                          className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-white/40 transition-colors hover:text-white"
+                          tabIndex={-1}
+                          className="absolute top-1/2 right-2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded text-gray-500 transition-colors hover:text-gray-300"
                         >
-                          {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                          {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                         </button>
                       </div>
                     </FormControl>
@@ -131,22 +139,31 @@ export default function LoginPage() {
                   </FormItem>
                 )}
               />
+
               <Button
                 type="submit"
                 disabled={isLoggingIn}
-                className="login-submit h-12 w-full gap-1.5 rounded-[10px] bg-[#5ec8f7] text-base font-semibold text-[#0b0d10] hover:bg-[#5ec8f7]/90"
+                className="login-submit flex h-11 w-full items-center justify-center gap-2 rounded-md bg-[#34b4f5] text-[15px] font-semibold text-black hover:bg-[#1fa3e6]"
               >
-                {isLoggingIn ? <Loader2 className="size-4 animate-spin" /> : null}
-                Sign in
-                {!isLoggingIn && <ArrowRight className="size-4" />}
+                {isLoggingIn ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Signing in…
+                  </>
+                ) : (
+                  <>
+                    Sign in
+                    <ArrowRight className="h-4 w-4" />
+                  </>
+                )}
               </Button>
             </form>
           </Form>
 
           {isMockMode && (
-            <div className="space-y-2 rounded-[10px] border border-white/10 bg-white/[0.03] p-4">
-              <p className="text-xs font-medium text-white/45">
-                Mock mode demo accounts. Password: <code className="font-mono text-white/70">{DEMO_PASSWORD}</code>
+            <div className="mt-6 space-y-2 rounded-md border border-[#262626] bg-[#181818] p-4">
+              <p className="text-xs font-medium text-gray-500">
+                Mock mode demo accounts. Password: <code className="font-mono text-gray-300">{DEMO_PASSWORD}</code>
               </p>
               <div className="flex flex-wrap gap-1.5">
                 {DEMO_CREDENTIALS.map((cred) => (
@@ -154,7 +171,7 @@ export default function LoginPage() {
                     key={cred.email}
                     type="button"
                     onClick={() => setPrefill(cred.email)}
-                    className="inline-flex min-h-9 items-center rounded-md border border-white/10 bg-white/[0.03] px-2.5 text-xs font-medium text-white/70 transition-colors hover:border-white/20 hover:bg-white/[0.06] hover:text-white"
+                    className="inline-flex min-h-9 items-center rounded-md border border-[#262626] bg-[#111111] px-2.5 text-xs font-medium text-gray-300 transition-colors hover:border-gray-600 hover:bg-[#181818] hover:text-white"
                   >
                     {cred.role.replace("_", " ")}
                   </button>
@@ -163,18 +180,15 @@ export default function LoginPage() {
             </div>
           )}
 
-          <p className="text-center text-xs text-white/40">
+          <p className="mt-6 text-center text-xs text-gray-500">
             Windows MusicServer administrator?{" "}
-            <Link
-              href="/servers"
-              className="font-medium text-white/70 underline underline-offset-2 hover:text-[#5ec8f7]"
-            >
+            <Link href="/servers" className="font-medium text-gray-300 underline underline-offset-2 hover:text-[#34b4f5]">
               Manage server pairing
             </Link>{" "}
             after signing in.
           </p>
         </div>
-      </div>
+      </section>
     </div>
   )
 }
