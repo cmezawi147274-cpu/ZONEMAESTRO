@@ -14,7 +14,7 @@ export function LoginHero() {
   return (
     <section className="login-form-enter relative hidden min-h-screen overflow-hidden lg:block lg:w-[70%]">
       <Image
-        src="/branding/login-hero-scene.jpg"
+        src="/branding/login-hero-scene-v2.jpg"
         alt="Dark luxury audio lounge interior"
         fill
         priority

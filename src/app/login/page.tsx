@@ -51,7 +51,19 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="grid min-h-screen bg-[#111111] text-white lg:grid-cols-[7fr_3fr]">
+    // Scoped font fix, not a globals.css change: html{font-family:var(--font-sans)}
+    // resolves to nothing app-wide — `--font-sans` in the @theme inline block
+    // (globals.css) is circularly self-referenced with no real value defined
+    // anywhere, so every page silently falls back to the browser's default
+    // serif. Pre-existing, not introduced by this work — out of scope to fix
+    // globally here (would touch shared theme config), but the login page
+    // can't ship serif, so it points `font-family` straight at the Geist
+    // variable next/font actually sets on <html> (--font-geist-sans), which
+    // does have a real value.
+    <div
+      className="grid min-h-screen bg-[#111111] text-white lg:grid-cols-[7fr_3fr]"
+      style={{ fontFamily: "var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif" }}
+    >
       <LoginHero />
 
       {/* `dark` scopes shadcn's dark token set to this panel (Alert,
