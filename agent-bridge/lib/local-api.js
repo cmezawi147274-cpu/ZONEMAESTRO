@@ -99,6 +99,22 @@ const stop = (zoneId) => action(zoneId, "stop");
 const mute = (zoneId) => action(zoneId, "mute");
 const unmute = (zoneId) => action(zoneId, "unmute");
 const setVolume = (zoneId, volume) => action(zoneId, "volume", { volume });
+/**
+ * Applies a 10-band equalizer curve to this zone's own output — the same
+ * shape CMMP sends (see src/lib/api/types.ts ZoneEqualizerSettings):
+ * { enabled, bands[10], bassBoost, loudness, virtualizer }.
+ *
+ * As of this writing the compiled local service's action set is the fixed
+ * list documented at the top of this file, and "eq" is not in it — this
+ * will 404 with `Unknown action: eq` against today's builds, the same way
+ * every other unsupported call here throws a real Error that
+ * lib/agent.js's executeCommand() catches and acks FAILED with (see
+ * REBOOT_SERVER for the same honesty pattern: this agent doesn't pretend
+ * to do what the machine it's on cannot). Left wired for real rather than
+ * stubbed out so the very next MusicServer build that adds a local `eq`
+ * zone action starts working with zero changes on the cloud side.
+ */
+const setEqualizer = (zoneId, settings) => action(zoneId, "eq", settings);
 const playTrack = (zoneId, trackId) => action(zoneId, "play", { trackId });
 const queueTrack = (zoneId, trackId) => request(zonePath(zoneId, "/playlist/tracks"), { method: "POST", body: { trackId, zoneName: zoneId } });
 
@@ -230,6 +246,7 @@ module.exports = {
   mute,
   unmute,
   setVolume,
+  setEqualizer,
   playTrack,
   toCmmpPlaybackState,
 };

@@ -56,6 +56,11 @@ export function useZoneControls(zoneId: string, serverId: string) {
 
   const send = (label: string, action: () => Promise<unknown>) =>
     command.mutateAsync(action).then(() => toast.success(`${label} applied`))
+  // Same mutation, same real command path, same error toast — just no
+  // success toast. Used only by setEqualizer below, which fires on a
+  // debounce while a slider is being dragged; a toast per autosave would
+  // be noise. (Errors still surface via `command`'s own onError.)
+  const sendSilent = (action: () => Promise<unknown>) => command.mutateAsync(action)
 
   return {
     isPending: command.isPending,
@@ -67,6 +72,11 @@ export function useZoneControls(zoneId: string, serverId: string) {
     setVolume: (volume: number) => send("Volume", () => zonesApi.setVolume(zoneId, serverId, volume, issuedBy)),
     mute: () => send("Mute", () => zonesApi.mute(zoneId, serverId, issuedBy)),
     unmute: () => send("Unmute", () => zonesApi.unmute(zoneId, serverId, issuedBy)),
+    /** Rides the exact same portal -> /commands -> agent -> local-api path
+     * as setVolume — see src/lib/api/zones.ts `setEqualizer` and
+     * agent-bridge/lib/local-api.js. */
+    setEqualizer: (equalizer: ZoneEqualizerSettings) =>
+      sendSilent(() => zonesApi.setEqualizer(zoneId, serverId, equalizer, issuedBy)),
   }
 }
 
@@ -78,21 +88,6 @@ export function useAssignZonePlaylist() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["zones"] })
       toast.success("Playlist assigned to zone")
-    },
-    onError: (e: Error) => toast.error(e.message),
-  })
-}
-
-/** Saves a zone's equalizer. Silent on success (this fires on a debounce
- * while the panel is open — a toast per autosave would be noise); errors
- * still surface, same as every other zone mutation. */
-export function useSetZoneEqualizer() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: ({ zoneId, equalizer }: { zoneId: string; equalizer: ZoneEqualizerSettings }) =>
-      zonesApi.setEqualizer(zoneId, equalizer),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["zones"] })
     },
     onError: (e: Error) => toast.error(e.message),
   })

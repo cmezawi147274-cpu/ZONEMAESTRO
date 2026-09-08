@@ -15,7 +15,7 @@ import type { Prisma } from "@prisma/client"
 // Restart Playback, Sync, Auto Boot) apart from routine zone transport when
 // deciding whether a FAILED ack is worth a persistent Alert — see the
 // POST /server/commands/ack handler there.
-export const ZONE_TRANSPORT_TYPES = new Set<CommandType>(["PLAY", "PAUSE", "STOP", "NEXT", "PREVIOUS", "SET_VOLUME", "MUTE", "UNMUTE"])
+export const ZONE_TRANSPORT_TYPES = new Set<CommandType>(["PLAY", "PAUSE", "STOP", "NEXT", "PREVIOUS", "SET_VOLUME", "MUTE", "UNMUTE", "SET_EQ"])
 
 /** Servers this caller may address: their own venue (VIEWER), otherwise
  * their organization. Super admins are unrestricted (null = no filter). */

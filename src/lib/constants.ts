@@ -71,6 +71,7 @@ export const COMMAND_TYPES = [
   "SET_VOLUME",
   "MUTE",
   "UNMUTE",
+  "SET_EQ",
   "REBOOT_SERVER",
   "SET_AUTO_BOOT",
   "FORGET_SERVER",

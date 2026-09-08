@@ -168,9 +168,9 @@ export interface Zone {
   excludedTrackIds: string[]
   /** Per-zone equalizer. Null means never configured — the UI treats that
    * the same as src/lib/equalizer/presets.ts `defaultEqualizer()` (flat,
-   * off). Persisted through POST /zones/:id/equalizer, same permission
-   * tier as volume/mute (zone:control). See that type's own doc comment
-   * for why this is plain zone config rather than a RemoteCommand. */
+   * off). Set the same way `volume` is — a SET_EQ RemoteCommand to this
+   * zone's own Music Server (src/lib/api/zones.ts `setEqualizer`), never
+   * written directly by a route. */
   equalizer: ZoneEqualizerSettings | null
 }
 
@@ -188,8 +188,8 @@ export interface ZoneEqualizerModule {
  * src/lib/equalizer/presets.ts `EQ_BANDS`. `presetId` is one of that
  * file's EQ_PRESETS ids, or "custom" once a band has been hand-edited off
  * whatever preset was active. `enabled` is the master bypass: false means
- * the bands (and modules) are stored but not applied — see
- * src/hooks/use-equalizer-preview.ts. */
+ * the bands (and modules) are stored but applied as flat on that zone's
+ * Music Server output — see agent-bridge/lib/local-api.js `setEqualizer`. */
 export interface ZoneEqualizerSettings {
   enabled: boolean
   presetId: string

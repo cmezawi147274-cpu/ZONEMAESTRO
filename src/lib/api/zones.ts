@@ -75,23 +75,6 @@ export const zonesApi = {
     return apiClient.post<Zone>(`/zones/${id}/playlist`, { playlistId })
   },
 
-  /** Saves this zone's equalizer — plain zone configuration, not a
-   * RemoteCommand (there is no physical device to ack it; see
-   * src/lib/api/types.ts ZoneEqualizerSettings). No offline gate, unlike
-   * assignPlaylist: nothing here needs a live agent, so it can be set up
-   * ahead of a venue's Music Server ever coming online. */
-  async setEqualizer(id: string, equalizer: ZoneEqualizerSettings): Promise<Zone> {
-    if (isMockMode) {
-      await delay(200)
-      const zone = store.zones.find((z) => z.id === id)
-      if (!zone) throw new Error("Zone not found")
-      zone.equalizer = equalizer
-      zone.updatedAt = new Date().toISOString()
-      return { ...zone }
-    }
-    return apiClient.post<Zone>(`/zones/${id}/equalizer`, equalizer)
-  },
-
   /** Playlists actually assigned to this zone — a PlaylistAssignment
    * (targetType ZONE) targeting it, or its own currentPlaylistId. Never
    * the whole library; see src/components/zones/zone-card.tsx, which uses
@@ -182,4 +165,9 @@ export const zonesApi = {
     commandsApi.send({ serverId, zoneId, type: "MUTE", issuedBy, source }),
   unmute: (zoneId: string, serverId: string, issuedBy: string, source?: CommandSource) =>
     commandsApi.send({ serverId, zoneId, type: "UNMUTE", issuedBy, source }),
+  /** Same path as setVolume above — a real command to that zone's Music
+   * Server, not a cloud-only write. See agent-bridge/lib/local-api.js
+   * `setEqualizer` for where it's actually applied. */
+  setEqualizer: (zoneId: string, serverId: string, equalizer: ZoneEqualizerSettings, issuedBy: string, source?: CommandSource) =>
+    commandsApi.send({ serverId, zoneId, type: "SET_EQ", payload: equalizer as unknown as Record<string, unknown>, issuedBy, source }),
 }

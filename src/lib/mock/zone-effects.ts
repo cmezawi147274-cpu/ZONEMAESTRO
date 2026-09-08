@@ -1,6 +1,6 @@
 import { store } from "@/lib/mock/store"
 import { mockBus } from "@/lib/realtime/bus"
-import type { RemoteCommand, ZonePlaybackSnapshot } from "@/lib/api/types"
+import type { RemoteCommand, ZonePlaybackSnapshot, ZoneEqualizerSettings } from "@/lib/api/types"
 
 /** Advances to the next (or previous) track in `trackIds`, skipping any id
  * in `excludedTrackIds` — a zone-local removal must never be landed on by
@@ -87,6 +87,14 @@ export function applyZoneCommandEffect(command: RemoteCommand): void {
       break
     case "UNMUTE":
       zone.muted = false
+      break
+    case "SET_EQ":
+      // Payload is already clamped client-side (src/lib/equalizer/presets.ts)
+      // before it's ever sent — mirrors backend/src/lib/zone-effects.ts,
+      // which trusts it the same way.
+      if (command.payload && typeof command.payload === "object") {
+        zone.equalizer = command.payload as unknown as ZoneEqualizerSettings
+      }
       break
     case "NEXT":
     case "PREVIOUS": {

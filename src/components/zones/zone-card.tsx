@@ -227,6 +227,7 @@ export function ZoneCard({
         <RoleGate permission="zone:control">
           <ZoneEqualizerDialog
             zone={zone}
+            controls={controls}
             volumeRow={
               <ZoneVolumeRow
                 volume={localVolume}
@@ -244,16 +245,15 @@ export function ZoneCard({
               />
             }
             trigger={
-              // Not gated on `offline`, deliberately — unlike transport/
-              // volume/playlist above, the equalizer is plain cloud
-              // configuration with no live device to reach right now (see
-              // zone-equalizer-dialog.tsx and the Zone.equalizer doc
-              // comment in backend/prisma/schema.prisma). Same reasoning
-              // as the Schedule trigger below, which isn't offline-gated
-              // either.
+              // Gated on `offline`, same as volume/transport/playlist above
+              // (and unlike Schedule below): the equalizer now rides the
+              // real SET_EQ command to this zone's own Music Server (see
+              // zone-equalizer-dialog.tsx), so it needs the exact same live
+              // agent volume/mute do.
               <button
                 type="button"
-                className="flex min-h-11 w-full items-center justify-between rounded-md border px-2.5 py-1.5 text-left text-[11px] transition-colors hover:bg-muted/40"
+                disabled={offline}
+                className="flex min-h-11 w-full items-center justify-between rounded-md border px-2.5 py-1.5 text-left text-[11px] transition-colors hover:bg-muted/40 disabled:pointer-events-none disabled:opacity-50"
               >
                 <span className="flex items-center gap-1.5 text-muted-foreground">
                   <SlidersHorizontal className="size-3" />

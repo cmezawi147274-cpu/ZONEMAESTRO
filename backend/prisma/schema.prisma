@@ -69,6 +69,11 @@ enum CommandType {
   SET_VOLUME
   MUTE
   UNMUTE
+  // Zone transport command, same tier as SET_VOLUME — rides the same
+  // portal -> /commands -> agent -> local-api path so a 10-band curve
+  // actually reaches that zone's own output, not just the cloud. See
+  // agent-bridge/lib/local-api.js and its `setEqualizer`.
+  SET_EQ
   REBOOT_SERVER
   SET_AUTO_BOOT
   FORGET_SERVER
@@ -317,13 +322,11 @@ model Zone {
   // Per-zone equalizer: master on/off, 10 band gains, preset id ("custom"
   // when a band has been hand-edited off-preset), and the Bass Boost /
   // Loudness / Virtualizer modules. Shape is src/lib/api/types.ts
-  // ZoneEqualizerSettings — validated on write in
-  // routes/zones.ts POST /zones/:id/equalizer, not by Prisma. Null means
-  // "never configured" (flat, off); the frontend supplies its own default
-  // rather than this column carrying one. The physical playback device has
-  // no DSP of its own today (see agent-bridge/lib/local-api.js) — this is
-  // real, persisted zone configuration, applied only to the in-browser
-  // Web Audio preview until a MusicServer build adds an equalizer output.
+  // ZoneEqualizerSettings. Written the same way `volume`/`muted` are —
+  // by applyZoneCommandEffect() once a SET_EQ RemoteCommand is ack'd by
+  // that zone's agent (see lib/zone-effects.ts), never directly by a
+  // route. Null means "never configured" (flat, off); the frontend
+  // supplies its own default rather than this column carrying one.
   equalizer Json?
 
   schedules Schedule[]

@@ -36,6 +36,7 @@ const ZONE_TRANSPORT_TYPES = new Set<CommandType>([
   "SET_VOLUME",
   "MUTE",
   "UNMUTE",
+  "SET_EQ",
 ])
 
 export const commandsApi = {

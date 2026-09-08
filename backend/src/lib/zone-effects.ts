@@ -80,6 +80,14 @@ export async function applyZoneCommandEffect(
     case "UNMUTE":
       data.muted = false
       break
+    case "SET_EQ":
+      // Same laxness as SET_VOLUME above: a malformed payload is silently
+      // ignored rather than rejected — shape is validated more usefully
+      // client-side (src/lib/equalizer/presets.ts clampDb/clampAmount)
+      // before it's ever sent. Trusts the payload's fields are already
+      // clamped rather than re-validating every field here.
+      if (payload && typeof payload === "object") data.equalizer = payload
+      break
     case "NEXT":
     case "PREVIOUS": {
       if (zone.currentPlaylistId) {

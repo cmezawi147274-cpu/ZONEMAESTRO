@@ -229,6 +229,11 @@ const HANDLERS = {
   UNMUTE: (zoneId) => local.unmute(zoneId),
   SET_VOLUME: (zoneId, payload) =>
     local.setVolume(zoneId, payload && typeof payload.volume === "number" ? payload.volume : 50),
+  // See lib/local-api.js `setEqualizer` for the honest caveat: this 404s
+  // against today's compiled builds (no local `eq` action yet), which
+  // executeCommand() below acks FAILED with a real error message rather
+  // than a fake SUCCESS.
+  SET_EQ: (zoneId, payload) => local.setEqualizer(zoneId, payload || {}),
 };
 
 /**

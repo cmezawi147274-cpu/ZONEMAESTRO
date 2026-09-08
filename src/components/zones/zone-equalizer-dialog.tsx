@@ -2,15 +2,11 @@
 
 import { useEffect, useRef, useState } from "react"
 import type { CSSProperties } from "react"
-import { Play, Square } from "lucide-react"
-import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger } from "@/components/ui/dialog"
 import { EqualizerCurve } from "@/components/zones/equalizer-curve"
 import { EqualizerModule } from "@/components/zones/equalizer-module"
-import { useSetZoneEqualizer } from "@/hooks/use-zones"
-import { useEqualizerPreview } from "@/hooks/use-equalizer-preview"
 import { EQ_PRESETS, CUSTOM_PRESET_ID, findPreset, defaultEqualizer, clampDb, clampAmount } from "@/lib/equalizer/presets"
 import type { Zone, ZoneEqualizerSettings, ZoneEqualizerModule as EqModule } from "@/lib/api/types"
 
@@ -42,54 +38,59 @@ const DIALOG_TOKENS = {
 
 export function ZoneEqualizerDialog({
   zone,
+  controls,
   volumeRow,
   trigger,
 }: {
   zone: Zone
+  /** Just the one method used here — the same useZoneControls(zone.id,
+   * zone.serverId) instance zone-card.tsx already owns for play/pause/
+   * volume, passed down so this dialog rides the exact same real command
+   * path (portal -> /commands -> agent -> local-api) rather than a second,
+   * cloud-only write. See src/hooks/use-zones.ts `setEqualizer`. */
+  controls: { setEqualizer: (equalizer: ZoneEqualizerSettings) => Promise<unknown> }
   volumeRow: React.ReactElement
   trigger: React.ReactElement
 }) {
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState<ZoneEqualizerSettings>(() => zone.equalizer ?? defaultEqualizer())
-  const setEqualizer = useSetZoneEqualizer()
-  const preview = useEqualizerPreview(draft)
 
   // Latest-value refs for the debounced save below, kept in sync after
   // every render (not written during render — refs are for effects/event
   // handlers, per this project's react-hooks/refs lint rule) so the
   // setTimeout callback never closes over a stale `draft` or a stale
-  // `mutate` from a since-replaced mutation object.
+  // `controls` from a since-remounted card.
   const draftRef = useRef(draft)
-  const mutateRef = useRef(setEqualizer.mutate)
+  const setEqualizerRef = useRef(controls.setEqualizer)
   useEffect(() => {
     draftRef.current = draft
-    mutateRef.current = setEqualizer.mutate
+    setEqualizerRef.current = controls.setEqualizer
   })
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const skipNextDebounce = useRef(true)
 
-  // Debounced autosave: local state updates the UI (and, while previewing,
-  // the audio) immediately on every change; the actual POST fires this long
-  // after the last one. Skips the render right after opening/resetting the
-  // dialog, which sets `draft` without the user having changed anything.
+  // Debounced autosave: local state updates the UI immediately on every
+  // change; the actual command fires this long after the last one. Skips
+  // the render right after opening/resetting the dialog, which sets
+  // `draft` without the user having changed anything.
   useEffect(() => {
     if (skipNextDebounce.current) {
       skipNextDebounce.current = false
       return
     }
     const t = setTimeout(() => {
-      mutateRef.current({ zoneId: zone.id, equalizer: draftRef.current })
+      setEqualizerRef.current(draftRef.current)
       saveTimerRef.current = null
     }, SAVE_DEBOUNCE_MS)
     saveTimerRef.current = t
     return () => clearTimeout(t)
-  }, [draft, zone.id])
+  }, [draft])
 
   function flushPendingSave() {
     if (saveTimerRef.current != null) {
       clearTimeout(saveTimerRef.current)
       saveTimerRef.current = null
-      mutateRef.current({ zoneId: zone.id, equalizer: draftRef.current })
+      setEqualizerRef.current(draftRef.current)
     }
   }
 
@@ -99,7 +100,6 @@ export function ZoneEqualizerDialog({
       setDraft(zone.equalizer ?? defaultEqualizer())
     } else {
       flushPendingSave()
-      if (preview.isPlaying) preview.toggle()
     }
     setOpen(next)
   }
@@ -141,7 +141,7 @@ export function ZoneEqualizerDialog({
             <div>
               <DialogTitle className="text-white">{zone.name} equalizer</DialogTitle>
               <DialogDescription className="text-white/50">
-                Shapes this zone&apos;s output only. Turning it off bypasses every band, flat.
+                Shapes this zone&apos;s own output on its Music Server. Turning it off bypasses every band, flat.
               </DialogDescription>
             </div>
             <div className="flex shrink-0 items-center gap-2">
@@ -152,36 +152,23 @@ export function ZoneEqualizerDialog({
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="flex items-center justify-between gap-3">
-            <Select value={draft.presetId} onValueChange={selectPreset} items={PRESET_SELECT_ITEMS} disabled={!draft.enabled}>
-              <SelectTrigger className="w-48 border-white/10 bg-white/[0.03] text-white" size="sm">
-                <SelectValue placeholder="Preset" />
-              </SelectTrigger>
-              {/* Select portals its popup independently of DialogContent (see
-                  src/components/ui/select.tsx), so neither the `dark` class
-                  nor the CSS-variable overrides above reach it — themed
-                  explicitly here instead. */}
-              <SelectContent className="border-white/10 bg-[#101215] text-white">
-                {EQ_PRESETS.map((p) => (
-                  <SelectItem key={p.id} value={p.id}>
-                    {p.name}
-                  </SelectItem>
-                ))}
-                <SelectItem value={CUSTOM_PRESET_ID}>Custom</SelectItem>
-              </SelectContent>
-            </Select>
-
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={preview.toggle}
-              className="border-white/15 bg-transparent text-white hover:bg-white/10 active:scale-[0.97] motion-reduce:active:scale-100"
-            >
-              {preview.isPlaying ? <Square className="size-3.5" /> : <Play className="size-3.5" />}
-              {preview.isPlaying ? "Stop preview" : "Preview"}
-            </Button>
-          </div>
+          <Select value={draft.presetId} onValueChange={selectPreset} items={PRESET_SELECT_ITEMS} disabled={!draft.enabled}>
+            <SelectTrigger className="w-48 border-white/10 bg-white/[0.03] text-white" size="sm">
+              <SelectValue placeholder="Preset" />
+            </SelectTrigger>
+            {/* Select portals its popup independently of DialogContent (see
+                src/components/ui/select.tsx), so neither the `dark` class
+                nor the CSS-variable overrides above reach it — themed
+                explicitly here instead. */}
+            <SelectContent className="border-white/10 bg-[#101215] text-white">
+              {EQ_PRESETS.map((p) => (
+                <SelectItem key={p.id} value={p.id}>
+                  {p.name}
+                </SelectItem>
+              ))}
+              <SelectItem value={CUSTOM_PRESET_ID}>Custom</SelectItem>
+            </SelectContent>
+          </Select>
 
           <EqualizerCurve zoneName={zone.name} bands={draft.bands} enabled={draft.enabled} onBandChange={updateBand} />
 
