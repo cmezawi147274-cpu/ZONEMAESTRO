@@ -1,0 +1,519 @@
+// Data model for the REAL cloud backend that this portal's src/lib/api/*
+// modules talk to once NEXT_PUBLIC_USE_MOCK_API=false. Not used while running
+// in mock mode. Provided as the source of truth for standing up the actual
+// API service (see README "Backend & Windows MusicServer Integration").
+//
+// Run against a PostgreSQL 15+ instance, e.g. the one in docker-compose.yml.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  SUPER_ADMIN
+  ORGANIZATION_ADMIN
+  LOCATION_MANAGER
+  VIEWER
+}
+
+enum OrganizationPlan {
+  STARTER
+  PROFESSIONAL
+  ENTERPRISE
+}
+
+enum OrganizationStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum ServerStatus {
+  ONLINE
+  OFFLINE
+  WARNING
+  UPDATING
+  UNKNOWN
+}
+
+enum SyncStatus {
+  AVAILABLE_IN_CLOUD
+  QUEUED_FOR_SYNC
+  SYNCING
+  CACHED_ON_SERVER
+  FAILED
+}
+
+enum CommandStatus {
+  PENDING
+  SENT
+  EXECUTING
+  SUCCESS
+  FAILED
+  TIMEOUT
+}
+
+enum CommandType {
+  SYNC_MUSIC
+  SYNC_CONFIG
+  RESTART_SERVICE
+  PLAY
+  PAUSE
+  STOP
+  NEXT
+  PREVIOUS
+  SET_VOLUME
+  MUTE
+  UNMUTE
+  REBOOT_SERVER
+  SET_AUTO_BOOT
+  FORGET_SERVER
+}
+
+enum ZonePlaybackState {
+  PLAYING
+  PAUSED
+  STOPPED
+  OFFLINE
+}
+
+enum PlaylistTargetType {
+  ORGANIZATION
+  LOCATION
+  SERVER
+  ZONE
+}
+
+enum LogLevel {
+  INFO
+  WARN
+  ERROR
+  DEBUG
+}
+
+enum AlertSeverity {
+  info
+  warning
+  critical
+}
+
+enum CommandSource {
+  USER
+  SUPER_ADMIN
+  SCHEDULE
+}
+
+enum PrayerName {
+  FAJR
+  DHUHR
+  ASR
+  MAGHRIB
+  ISHA
+}
+
+model User {
+  id             String         @id @default(cuid())
+  name           String
+  email          String         @unique
+  passwordHash   String
+  role           Role
+  organizationId String?
+  organization   Organization?  @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  // The single location a scoped user is bound to. Required in practice for
+  // VIEWER (playback-only, one venue) and LOCATION_MANAGER; null for
+  // organization-wide and platform-wide roles. Its organization is the
+  // source of truth for organizationId above — see
+  // backend/src/routes/users.ts, which derives one from the other rather
+  // than trusting a client-sent pair.
+  locationId     String?
+  location       Location?      @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  refreshTokens  RefreshToken[]
+  createdAt      DateTime       @default(now())
+  lastLoginAt    DateTime?
+
+  @@index([organizationId])
+  @@index([locationId])
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+  revokedAt DateTime?
+
+  @@index([userId])
+}
+
+model Organization {
+  id           String             @id @default(cuid())
+  name         String
+  slug         String             @unique
+  contactName  String
+  contactEmail String
+  plan         OrganizationPlan   @default(PROFESSIONAL)
+  status       OrganizationStatus @default(ACTIVE)
+  createdAt    DateTime           @default(now())
+
+  users        User[]
+  locations    Location[]
+  servers      MusicServer[]
+  playlists    Playlist[]
+  prayerConfig PrayerConfig?
+
+  @@index([slug])
+}
+
+model Location {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  address        String
+  city           String
+  region         String
+  country        String
+  timezone       String
+  createdAt      DateTime     @default(now())
+
+  servers MusicServer[]
+  zones   Zone[]
+  users   User[]
+
+  @@index([organizationId])
+}
+
+model MusicServer {
+  id               String       @id @default(cuid())
+  organizationId   String
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  locationId       String
+  location         Location     @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  name             String
+  status           ServerStatus @default(UNKNOWN)
+  version          String?
+  os               String?
+  ipAddress        String?
+  // Pairing: a short-lived code the on-site technician enters into the
+  // Windows MusicServer installer. The server authenticates that exchange
+  // and issues its own long-lived agent credential — no inbound ports ever
+  // need to be opened on the restaurant network.
+  pairingCodeHash  String?
+  // Plaintext pairing code kept alongside the hash purely so the portal's
+  // MusicServer detail view (src/lib/api/types.ts MusicServer.pairingCode)
+  // can display/re-display it to the admin before it's consumed by the
+  // agent handshake. Backend-only addition — not present in the frozen
+  // top-level prisma/schema.prisma. Cleared once the agent pairs.
+  pairingCode      String?
+  pairingExpiresAt DateTime?
+  agentTokenHash   String?
+  pairedAt         DateTime?
+  lastHeartbeatAt  DateTime?
+  cpuPercent       Float        @default(0)
+  ramPercent       Float        @default(0)
+  diskPercent      Float        @default(0)
+  diskFreeGb       Float        @default(0)
+  diskTotalGb      Float        @default(0)
+  cachedTracks     Int          @default(0)
+  cachedSizeGb     Float        @default(0)
+  createdAt        DateTime     @default(now())
+  // Whether the Windows MusicServer should auto-start on boot (service
+  // Automatic + scheduled tasks + cloud-link startup shortcut). Defaults to
+  // true after SETUP; toggled via the SET_AUTO_BOOT command and reported
+  // back on every heartbeat/ack from C:\ProgramData\MusicServer\auto-boot.json.
+  autoBootEnabled  Boolean      @default(true)
+  // The venue PC's own IANA timezone, as the agent reports it each
+  // heartbeat (Intl.DateTimeFormat().resolvedOptions().timeZone). Prayer
+  // times fire on this clock, never the cloud host's. Null until an agent
+  // running a build new enough to send it has checked in; the Location's
+  // timezone is the fallback.
+  reportedTimezone   String?
+  // Real coordinates, only ever set when the agent actually knows them.
+  // Never defaulted to 0,0 — when these are null the venue's coordinates
+  // are resolved from its Location's city/country instead (lib/geo.ts).
+  reportedLatitude   Float?
+  reportedLongitude  Float?
+  // When a *usable* timezone last arrived on a heartbeat. Drives the
+  // portal's venue-location pill (fresh vs stale) and picks the winner when
+  // several servers share one Location — see lib/prayer-location.ts.
+  reportedLocationAt DateTime?
+
+  zones          Zone[]
+  commands       RemoteCommand[]
+  logs           LogEntry[]
+  trackSyncState TrackSyncState[]
+  alerts         Alert[]
+  agentLink      AgentLink?
+
+  @@index([organizationId])
+  @@index([locationId])
+}
+
+/// Maps a Windows MusicServer agent's own identifiers onto this CMMP
+/// server row. The agent (a compiled win-x64 service, MusicServer.Api —
+/// never decompiled/rewritten here) speaks GUID-keyed "ServerGuid" /
+/// "SiteId" identifiers over its outbound HTTPS protocol; CMMP is
+/// cuid-keyed throughout. This table is the one seam that reconciles them,
+/// written once at POST /api/pairing/complete and read on every
+/// subsequent agent request to resolve the bearer token back to a
+/// MusicServer row. Site -> Location, Guid -> cuid.
+model AgentLink {
+  id              String       @id @default(cuid())
+  cmmpServerId    String       @unique
+  server          MusicServer  @relation(fields: [cmmpServerId], references: [id], onDelete: Cascade)
+  agentServerGuid String       @unique
+  siteId          String?
+  pairedAt        DateTime     @default(now())
+  lastSeenAt      DateTime?
+
+  @@index([agentServerGuid])
+}
+
+model Zone {
+  id                String            @id @default(cuid())
+  serverId          String
+  server            MusicServer       @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  locationId        String
+  location          Location          @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  name              String
+  playbackState     ZonePlaybackState @default(OFFLINE)
+  currentPlaylistId String?
+  currentPlaylist   Playlist?         @relation(fields: [currentPlaylistId], references: [id], onDelete: SetNull)
+  currentTrackId    String?
+  volume            Int               @default(50)
+  muted             Boolean           @default(false)
+  updatedAt         DateTime          @updatedAt
+
+  // Prayer Mode
+  prayerModeEnabled      Boolean            @default(true)
+  pausedByPrayer         PrayerName?
+  prePrayerPlaybackState ZonePlaybackState?
+  prePrayerPlaylistId    String?
+  prePrayerTrackId       String?
+
+  // Super Admin / command reconciliation
+  commandSequence     Int       @default(0)
+  lastAppliedSequence Int       @default(0)
+  lastOverrideAt      DateTime?
+
+  // Per-zone track exclusion list against its current playlist (see
+  // src/lib/api/types.ts Zone.excludedTrackIds). Backend-only addition.
+  excludedTrackIds String[] @default([])
+
+  // The Windows agent's own local zone identifier for this zone (its
+  // MusicServer.Api database uses its own ids, not CMMP's cuids). Set the
+  // first time the agent reports this zone via POST
+  // /api/server/zones/sync; stable thereafter so re-syncs upsert instead
+  // of duplicating. Backend-only addition, not in the frozen top-level
+  // schema.
+  localZoneId String?
+
+  schedules Schedule[]
+  commands  RemoteCommand[]
+
+  @@index([serverId])
+  @@index([locationId])
+  @@unique([serverId, localZoneId])
+}
+
+model Track {
+  id           String   @id @default(cuid())
+  title        String
+  artist       String
+  album        String
+  genre        String
+  durationSec  Int
+  fileSizeMb   Float
+  storageKey   String // object storage path/key for the audio file
+  uploadedById String
+  uploadedAt   DateTime @default(now())
+
+  // Folder library grouping (src/lib/api/types.ts Track.folderId). Optional —
+  // every track uploaded before folders existed (and any never assigned to
+  // one) shows up as "Unfiled" in the UI. Deleting a folder never deletes
+  // its tracks: the FK just falls back to null.
+  folderId String?
+  folder   MusicFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+
+  playlistTracks  PlaylistTrack[]
+  trackSyncStates TrackSyncState[]
+
+  // Search: query with Postgres `ILIKE` / trigram indexes (pg_trgm) or wire
+  // up a dedicated search index (e.g. Meilisearch) — Prisma's `@@fulltext`
+  // index type targets MySQL/MongoDB, not PostgreSQL.
+  @@index([genre])
+  @@index([folderId])
+}
+
+/// A user-defined grouping of Tracks in the cloud music library
+/// (src/app/(portal)/music/page.tsx). Purely organizational — never synced
+/// to Windows MusicServers itself, only its tracks are.
+model MusicFolder {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  tracks Track[]
+}
+
+model Playlist {
+  id             String        @id @default(cuid())
+  name           String
+  description    String?
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  tracks      PlaylistTrack[]
+  assignments PlaylistAssignment[]
+  zones       Zone[]
+  schedules   Schedule[]
+
+  @@index([organizationId])
+}
+
+model PlaylistTrack {
+  playlistId String
+  playlist   Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+  trackId    String
+  track      Track    @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  position   Int
+
+  @@id([playlistId, trackId])
+  @@index([playlistId, position])
+}
+
+model PlaylistAssignment {
+  id         String             @id @default(cuid())
+  playlistId String
+  playlist   Playlist           @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+  targetType PlaylistTargetType
+  targetId   String
+  assignedAt DateTime           @default(now())
+
+  @@index([playlistId])
+  @@index([targetType, targetId])
+}
+
+model TrackSyncState {
+  trackId         String
+  track           Track       @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  serverId        String
+  server          MusicServer @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  status          SyncStatus  @default(AVAILABLE_IN_CLOUD)
+  progressPercent Int         @default(0)
+  errorMessage    String?
+  updatedAt       DateTime    @updatedAt
+
+  @@id([trackId, serverId])
+  @@index([serverId, status])
+}
+
+model Schedule {
+  id         String   @id @default(cuid())
+  zoneId     String
+  zone       Zone     @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+  playlistId String
+  playlist   Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+  name       String
+  startTime  String // "HH:mm", evaluated in the location's timezone
+  endTime    String
+  days       String[] // subset of MON..SUN
+  priority   Int      @default(1)
+  enabled    Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  @@index([zoneId])
+}
+
+model RemoteCommand {
+  id            String        @id @default(cuid())
+  serverId      String
+  server        MusicServer   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  zoneId        String?
+  zone          Zone?         @relation(fields: [zoneId], references: [id], onDelete: SetNull)
+  type          CommandType
+  payload       Json?
+  status        CommandStatus @default(PENDING)
+  source        CommandSource @default(USER)
+  sequence      Int?
+  issuedById    String
+  issuedAt      DateTime      @default(now())
+  sentAt        DateTime?
+  executingAt   DateTime?
+  completedAt   DateTime?
+  resultMessage String?
+
+  @@index([serverId, status])
+}
+
+/// Singleton-per-organization Prayer Mode configuration. Location fields are
+/// resolved server-side from Country + City (see src/lib/prayer/locations.ts)
+/// — latitude/longitude/timezone are internal and never surfaced in the UI.
+model PrayerConfig {
+  id                  String       @id @default(cuid())
+  organizationId      String       @unique
+  organization        Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  enabled             Boolean      @default(false)
+  // Id of the Location this config follows (src/lib/api/types.ts
+  // PrayerConfig.linkedLocationId), or null for a manually-picked location.
+  // Backend-only addition.
+  linkedLocationId    String?
+  country             String?
+  city                String?
+  latitude            Float?
+  longitude           Float?
+  timezone            String?
+  calculationMethodId Int          @default(3)
+  prayers             Json // Record<PrayerName, { enabled, offsetMinutes, pauseDurationMinutes }>
+  updatedAt           DateTime     @updatedAt
+}
+
+model LogEntry {
+  id        String      @id @default(cuid())
+  serverId  String
+  server    MusicServer @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  level     LogLevel
+  message   String
+  source    String
+  timestamp DateTime    @default(now())
+
+  @@index([serverId, timestamp])
+}
+
+model Alert {
+  id           String        @id @default(cuid())
+  severity     AlertSeverity
+  title        String
+  message      String
+  serverId     String?
+  server       MusicServer?  @relation(fields: [serverId], references: [id], onDelete: SetNull)
+  locationId   String?
+  createdAt    DateTime      @default(now())
+  acknowledged Boolean       @default(false)
+
+  @@index([serverId])
+  @@index([acknowledged])
+}
+
+/// Fleet-wide activity feed (src/lib/api/types.ts ActivityEvent /
+/// monitoringApi.activity). Not present in the frozen top-level schema —
+/// backend-only addition, written whenever a realtime event worth showing
+/// in the activity log is emitted.
+model ActivityEvent {
+  id        String   @id @default(cuid())
+  type      String
+  message   String
+  serverId  String?
+  zoneId    String?
+  timestamp DateTime @default(now())
+
+  @@index([timestamp])
+}
