@@ -5,7 +5,7 @@ import { store } from "@/lib/mock/store"
 import { commandsApi } from "@/lib/api/commands"
 import { getTenantScope } from "@/lib/auth/session"
 import type { CommandSource } from "@/lib/constants"
-import type { Playlist, Zone } from "@/lib/api/types"
+import type { Playlist, Zone, ZoneEqualizerSettings } from "@/lib/api/types"
 
 export const zonesApi = {
   async list(filters?: { serverId?: string; locationId?: string }): Promise<Zone[]> {
@@ -73,6 +73,23 @@ export const zonesApi = {
       return { ...zone }
     }
     return apiClient.post<Zone>(`/zones/${id}/playlist`, { playlistId })
+  },
+
+  /** Saves this zone's equalizer — plain zone configuration, not a
+   * RemoteCommand (there is no physical device to ack it; see
+   * src/lib/api/types.ts ZoneEqualizerSettings). No offline gate, unlike
+   * assignPlaylist: nothing here needs a live agent, so it can be set up
+   * ahead of a venue's Music Server ever coming online. */
+  async setEqualizer(id: string, equalizer: ZoneEqualizerSettings): Promise<Zone> {
+    if (isMockMode) {
+      await delay(200)
+      const zone = store.zones.find((z) => z.id === id)
+      if (!zone) throw new Error("Zone not found")
+      zone.equalizer = equalizer
+      zone.updatedAt = new Date().toISOString()
+      return { ...zone }
+    }
+    return apiClient.post<Zone>(`/zones/${id}/equalizer`, equalizer)
   },
 
   /** Playlists actually assigned to this zone — a PlaylistAssignment

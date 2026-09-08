@@ -1,10 +1,9 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { Play, Pause, Square, SkipBack, SkipForward, Volume2, VolumeX, Moon, ListMusic, CalendarClock, Trash2 } from "lucide-react"
+import { Play, Pause, Square, SkipBack, SkipForward, Moon, ListMusic, CalendarClock, SlidersHorizontal, Trash2 } from "lucide-react"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Slider } from "@/components/ui/slider"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
@@ -28,6 +27,8 @@ import { useSchedules } from "@/hooks/use-schedules"
 import { useTracks } from "@/hooks/use-music"
 import { ZonePlaylistDialog } from "@/components/zones/zone-playlist-dialog"
 import { ZoneScheduleDialog } from "@/components/zones/zone-schedule-dialog"
+import { ZoneVolumeRow } from "@/components/zones/zone-volume-row"
+import { ZoneEqualizerDialog, equalizerSummary } from "@/components/zones/zone-equalizer-dialog"
 import { formatRelativeTime } from "@/lib/format"
 import { PRAYER_LABELS, PRAYER_NAMES } from "@/lib/constants"
 import type { PrayerTimesToday, Zone } from "@/lib/api/types"
@@ -207,28 +208,61 @@ export function ZoneCard({
             </Button>
           </div>
 
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="icon-sm" disabled={offline} onClick={() => (zone.muted ? controls.unmute() : controls.mute())}>
-              {zone.muted ? <VolumeX className="size-4" /> : <Volume2 className="size-4" />}
-            </Button>
-            <Slider
-              value={[localVolume]}
-              max={100}
-              step={1}
-              disabled={offline}
-              onValueChange={(v: number | readonly number[]) => {
-                setDraggingVolume(true)
-                setLocalVolume(Array.isArray(v) ? v[0] : v)
-              }}
-              onValueCommitted={(v: number | readonly number[]) => {
-                const next = Array.isArray(v) ? v[0] : v
-                setDraggingVolume(false)
-                controls.setVolume(next).catch(() => setLocalVolume(zone.volume))
-              }}
-              className="flex-1"
-            />
-            <span className="w-8 text-right text-xs tabular-nums text-muted-foreground">{localVolume}%</span>
-          </div>
+          <ZoneVolumeRow
+            volume={localVolume}
+            muted={zone.muted}
+            offline={offline}
+            onMuteToggle={() => (zone.muted ? controls.unmute() : controls.mute())}
+            onValueChange={(next) => {
+              setDraggingVolume(true)
+              setLocalVolume(next)
+            }}
+            onValueCommitted={(next) => {
+              setDraggingVolume(false)
+              controls.setVolume(next).catch(() => setLocalVolume(zone.volume))
+            }}
+          />
+        </RoleGate>
+
+        <RoleGate permission="zone:control">
+          <ZoneEqualizerDialog
+            zone={zone}
+            volumeRow={
+              <ZoneVolumeRow
+                volume={localVolume}
+                muted={zone.muted}
+                offline={offline}
+                onMuteToggle={() => (zone.muted ? controls.unmute() : controls.mute())}
+                onValueChange={(next) => {
+                  setDraggingVolume(true)
+                  setLocalVolume(next)
+                }}
+                onValueCommitted={(next) => {
+                  setDraggingVolume(false)
+                  controls.setVolume(next).catch(() => setLocalVolume(zone.volume))
+                }}
+              />
+            }
+            trigger={
+              // Not gated on `offline`, deliberately — unlike transport/
+              // volume/playlist above, the equalizer is plain cloud
+              // configuration with no live device to reach right now (see
+              // zone-equalizer-dialog.tsx and the Zone.equalizer doc
+              // comment in backend/prisma/schema.prisma). Same reasoning
+              // as the Schedule trigger below, which isn't offline-gated
+              // either.
+              <button
+                type="button"
+                className="flex min-h-11 w-full items-center justify-between rounded-md border px-2.5 py-1.5 text-left text-[11px] transition-colors hover:bg-muted/40"
+              >
+                <span className="flex items-center gap-1.5 text-muted-foreground">
+                  <SlidersHorizontal className="size-3" />
+                  <span className="font-medium">Equalizer</span>
+                </span>
+                <span className="text-muted-foreground">{equalizerSummary(zone.equalizer)}</span>
+              </button>
+            }
+          />
         </RoleGate>
 
         <RoleGate permission="zone:assign">

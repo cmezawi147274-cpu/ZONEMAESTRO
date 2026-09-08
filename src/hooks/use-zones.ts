@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { zonesApi } from "@/lib/api/zones"
 import { useAuth } from "@/hooks/use-auth"
 import { toast } from "sonner"
+import type { ZoneEqualizerSettings } from "@/lib/api/types"
 
 export function useZones(filters?: { serverId?: string; locationId?: string }) {
   return useQuery({
@@ -77,6 +78,21 @@ export function useAssignZonePlaylist() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["zones"] })
       toast.success("Playlist assigned to zone")
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+}
+
+/** Saves a zone's equalizer. Silent on success (this fires on a debounce
+ * while the panel is open — a toast per autosave would be noise); errors
+ * still surface, same as every other zone mutation. */
+export function useSetZoneEqualizer() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ zoneId, equalizer }: { zoneId: string; equalizer: ZoneEqualizerSettings }) =>
+      zonesApi.setEqualizer(zoneId, equalizer),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["zones"] })
     },
     onError: (e: Error) => toast.error(e.message),
   })

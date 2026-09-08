@@ -120,6 +120,59 @@ export default async function zonesRoutes(app: FastifyInstance) {
     return reply.send(toZone(updated))
   })
 
+  // --------------------------------------------------------------------
+  // Per-zone equalizer (master on/off, 10 band gains, preset id, and the
+  // Bass Boost / Loudness / Virtualizer modules). Same permission tier as
+  // transport/volume (zone:control) since this is an audio-output control,
+  // not a library-management one like zone:assign. Plain cloud config, not
+  // a RemoteCommand: unlike PLAY/SET_VOLUME there is no physical device to
+  // wait on an ack from — see the `equalizer` field comment on the Zone
+  // model. Validated by hand here, matching the rest of this file (no zod
+  // in this backend).
+  // --------------------------------------------------------------------
+  app.post<{ Params: { id: string }; Body: unknown }>("/zones/:id/equalizer", async (request, reply) => {
+    const user = requireUser(request)
+    if (!can(user.role, "zone:control")) throw forbidden()
+    const zone = await scopedZone(tenantScope(request), request.params.id)
+
+    const body = request.body as Record<string, unknown> | null
+    if (!body || typeof body !== "object") throw badRequest("Invalid equalizer settings.")
+
+    const isModule = (v: unknown): v is { on: boolean; amount: number } =>
+      !!v &&
+      typeof v === "object" &&
+      typeof (v as { on?: unknown }).on === "boolean" &&
+      typeof (v as { amount?: unknown }).amount === "number" &&
+      Number.isFinite((v as { amount: number }).amount)
+
+    const bands = body.bands
+    if (
+      typeof body.enabled !== "boolean" ||
+      typeof body.presetId !== "string" ||
+      !Array.isArray(bands) ||
+      bands.length !== 10 ||
+      !bands.every((g) => typeof g === "number" && Number.isFinite(g)) ||
+      !isModule(body.bassBoost) ||
+      !isModule(body.loudness) ||
+      !isModule(body.virtualizer)
+    ) {
+      throw badRequest("Invalid equalizer settings.")
+    }
+
+    const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(min, n))
+    const equalizer = {
+      enabled: body.enabled,
+      presetId: body.presetId,
+      bands: (bands as number[]).map((g) => clamp(g, -12, 12)),
+      bassBoost: { on: (body.bassBoost as { on: boolean }).on, amount: clamp((body.bassBoost as { amount: number }).amount, 0, 100) },
+      loudness: { on: (body.loudness as { on: boolean }).on, amount: clamp((body.loudness as { amount: number }).amount, 0, 100) },
+      virtualizer: { on: (body.virtualizer as { on: boolean }).on, amount: clamp((body.virtualizer as { amount: number }).amount, 0, 100) },
+    }
+
+    const updated = await prisma.zone.update({ where: { id: zone.id }, data: { equalizer } })
+    return reply.send(toZone(updated))
+  })
+
   app.post<{ Params: { id: string; trackId: string } }>("/zones/:id/tracks/:trackId/remove", async (request, reply) => {
     const user = requireUser(request)
     if (!can(user.role, "zone:assign")) throw forbidden()

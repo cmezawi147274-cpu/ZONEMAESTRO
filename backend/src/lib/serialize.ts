@@ -129,6 +129,10 @@ export function toZone(z: DbZone) {
     lastAppliedSequence: z.lastAppliedSequence,
     lastOverrideAt: z.lastOverrideAt ? z.lastOverrideAt.toISOString() : null,
     excludedTrackIds: z.excludedTrackIds,
+    // Opaque to the backend — validated on write (POST /zones/:id/equalizer),
+    // shaped by src/lib/api/types.ts ZoneEqualizerSettings. Null until a
+    // zone has ever had its equalizer touched.
+    equalizer: (z.equalizer ?? null) as Record<string, unknown> | null,
   }
 }
 

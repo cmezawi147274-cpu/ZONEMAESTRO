@@ -166,6 +166,37 @@ export interface Zone {
    * different playlist is assigned. See src/lib/api/zones.ts
    * `effectiveTrackIds` / `removeTrackFromZone`. */
   excludedTrackIds: string[]
+  /** Per-zone equalizer. Null means never configured — the UI treats that
+   * the same as src/lib/equalizer/presets.ts `defaultEqualizer()` (flat,
+   * off). Persisted through POST /zones/:id/equalizer, same permission
+   * tier as volume/mute (zone:control). See that type's own doc comment
+   * for why this is plain zone config rather than a RemoteCommand. */
+  equalizer: ZoneEqualizerSettings | null
+}
+
+/** One of the three fixed-purpose EQ modules (Bass Boost, Loudness,
+ * Virtualizer) — a toggle plus a 0-100 amount, independent of which preset
+ * or custom band curve is active. */
+export interface ZoneEqualizerModule {
+  on: boolean
+  /** 0-100. */
+  amount: number
+}
+
+/** Per-zone equalizer settings — see Zone.equalizer. `bands` always has
+ * exactly 10 gains (-12..12 dB), in the order of
+ * src/lib/equalizer/presets.ts `EQ_BANDS`. `presetId` is one of that
+ * file's EQ_PRESETS ids, or "custom" once a band has been hand-edited off
+ * whatever preset was active. `enabled` is the master bypass: false means
+ * the bands (and modules) are stored but not applied — see
+ * src/hooks/use-equalizer-preview.ts. */
+export interface ZoneEqualizerSettings {
+  enabled: boolean
+  presetId: string
+  bands: number[]
+  bassBoost: ZoneEqualizerModule
+  loudness: ZoneEqualizerModule
+  virtualizer: ZoneEqualizerModule
 }
 
 export interface Track {

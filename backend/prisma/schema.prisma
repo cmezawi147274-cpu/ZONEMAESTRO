@@ -314,6 +314,18 @@ model Zone {
   // schema.
   localZoneId String?
 
+  // Per-zone equalizer: master on/off, 10 band gains, preset id ("custom"
+  // when a band has been hand-edited off-preset), and the Bass Boost /
+  // Loudness / Virtualizer modules. Shape is src/lib/api/types.ts
+  // ZoneEqualizerSettings — validated on write in
+  // routes/zones.ts POST /zones/:id/equalizer, not by Prisma. Null means
+  // "never configured" (flat, off); the frontend supplies its own default
+  // rather than this column carrying one. The physical playback device has
+  // no DSP of its own today (see agent-bridge/lib/local-api.js) — this is
+  // real, persisted zone configuration, applied only to the in-browser
+  // Web Audio preview until a MusicServer build adds an equalizer output.
+  equalizer Json?
+
   schedules Schedule[]
   commands  RemoteCommand[]
 
