@@ -1,4 +1,5 @@
 import Image from "next/image"
+import { LoginHeroScene } from "@/app/login/login-hero-scene"
 
 const ICON_SRC = "/branding/zonemaestro-icon.jpg"
 
@@ -34,16 +35,12 @@ export function LoginHero({
         <Image src={photoSrc} alt="" fill priority sizes="70vw" className="object-cover" />
       ) : (
         // PLACEHOLDER — no real venue photo has been supplied yet (see
-        // chat). Replace by passing `photoSrc` from page.tsx once one is
-        // uploaded; everything else on this panel is already final.
-        <div
-          aria-hidden
-          className="absolute inset-0"
-          style={{
-            background:
-              "radial-gradient(700px circle at 72% 28%, rgba(94,200,247,0.10), transparent 60%), radial-gradient(500px circle at 25% 75%, rgba(255,196,120,0.06), transparent 60%), linear-gradient(180deg, #0b0d10 0%, #101215 100%)",
-          }}
-        />
+        // chat: no tool in this environment can pull pixel data out of a
+        // chat-attached image onto this server's filesystem). An
+        // atmospheric SVG scene, not a photo — see login-hero-scene.tsx.
+        // Replace by passing `photoSrc` from page.tsx once a real photo
+        // reaches this server; everything else on this panel is final.
+        <LoginHeroScene />
       )}
 
       {/* Cinematic overlay — darkens the photo so type stays readable at
