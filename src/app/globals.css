@@ -128,3 +128,67 @@
     @apply font-sans;
   }
 }
+
+/* ---------------------------------------------------------------------- *
+ * /login — one enter animation, one error shake, one button press.
+ * Scoped to this route only. Everything gated on prefers-reduced-motion.
+ * ---------------------------------------------------------------------- */
+
+.login-form-enter {
+  animation: login-form-enter 600ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes login-form-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.login-error-shake {
+  animation: login-error-shake 420ms cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
+@keyframes login-error-shake {
+  10%,
+  90% {
+    transform: translateX(-1px);
+  }
+  20%,
+  80% {
+    transform: translateX(2px);
+  }
+  30%,
+  50%,
+  70% {
+    transform: translateX(-4px);
+  }
+  40%,
+  60% {
+    transform: translateX(4px);
+  }
+}
+
+.login-submit {
+  transition: transform 150ms ease;
+}
+
+.login-submit:active {
+  transform: scale(0.97);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-form-enter {
+    animation: none;
+  }
+  .login-error-shake {
+    animation: none;
+  }
+  .login-submit:active {
+    transform: none;
+  }
+}
