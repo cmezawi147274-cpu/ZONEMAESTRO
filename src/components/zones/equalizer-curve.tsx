@@ -124,12 +124,26 @@ export function EqualizerCurve({
           {/* One accessible vertical Slider per band, evenly spaced
               across the same width the curve above spans, each filling
               this box's full height so its thumb travel matches the
-              SVG's 0..100% exactly. */}
+              SVG's 0..100% exactly.
+              thumbAlignment="center" overrides this shared component's
+              own default of "edge" (src/components/ui/slider.tsx), just
+              for these instances — the actual remaining cause of the
+              extremes not matching. With "edge" (Base UI's SliderThumb:
+              `inset: thumbAlignment !== 'center'`), the thumb's *center*
+              is deliberately kept half the thumb's own size away from
+              each end of the track, so the thumb never reaches the true
+              0%/100% position the SVG curve's endpoints are drawn at —
+              invisible at 0 dB (the inset is symmetric, so it cancels out
+              exactly at the midpoint) and growing the further a value
+              sits from center, worst at +-12 dB. "center" removes that
+              inset entirely, so the thumb's center always sits at the
+              exact same percent the curve does, at every value. */}
           <div className={`relative h-full items-stretch ${rowLayout}`}>
             {EQ_BANDS.map((hz, i) => (
               <Slider
                 key={hz}
                 orientation="vertical"
+                thumbAlignment="center"
                 value={[bands[i] ?? 0]}
                 min={EQ_MIN_DB}
                 max={EQ_MAX_DB}
