@@ -12,7 +12,10 @@ const HERO_ZONES = [
 
 export function LoginHero() {
   return (
-    <section className="login-form-enter relative hidden min-h-screen overflow-hidden lg:block lg:w-[70%]">
+    // Width comes from the parent grid's `7fr` column. It must NOT also carry
+    // a `w-[70%]`: that resolves against the column, not the viewport, and
+    // shrinks the stage to 49% of the page — which clipped the headline.
+    <section className="login-form-enter relative hidden min-h-screen overflow-hidden lg:block">
       <Image
         src="/branding/login-hero-scene-v2.jpg"
         alt="Dark luxury audio lounge interior"
@@ -35,49 +38,53 @@ export function LoginHero() {
         }}
       />
 
-      {/* Top-left: icon + "Precision Audio Orchestration" lockup, baked
-          into the one asset — screen-blended so its black background
-          disappears into the page. */}
-      <div className="absolute top-0 left-0 p-10">
+      {/* One flow column instead of three independently-positioned blocks.
+          Absolutely centring the wordmark let it drift into the lockup on
+          short/wide windows; as flex rows the three can never collide, at
+          any viewport. */}
+      <div className="relative flex min-h-screen flex-col justify-between p-10">
+        {/* Icon + "Precision Audio Orchestration" lockup, baked into the one
+            asset — screen-blended so its black background disappears. */}
         <Image
-          src="/branding/login-mark.jpg"
+          src="/branding/login-mark-trimmed.png"
           alt="ZoneMaestro — Precision Audio Orchestration"
-          width={300}
-          height={300}
+          width={467}
+          height={425}
           priority
           draggable={false}
-          className="w-[180px] mix-blend-screen contrast-125 [filter:drop-shadow(0_8px_22px_rgba(0,0,0,0.5))] select-none xl:w-[220px]"
+          className="h-auto w-[clamp(7.5rem,9vw,10rem)] select-none"
+          // Inline, not utilities: `contrast-125` and an arbitrary
+          // `[filter:drop-shadow(…)]` both write `filter`, so one silently
+          // clobbers the other. One declaration keeps the whole chain.
+          style={{
+            mixBlendMode: "screen",
+            filter: "contrast(1.25) drop-shadow(0 8px 22px rgba(0, 0, 0, 0.5))",
+          }}
         />
-      </div>
 
-      {/* Center-left: the wordmark. Source art is dark text on a light
-          card — inverted + hue-rotated back to blue-gray, then
-          screen-blended, so only the lettering composites onto the photo. */}
-      <div className="absolute top-1/2 left-10 -translate-y-1/2">
-        <Image
-          src="/branding/login-wordmark.png"
-          alt="ZoneMaestro"
-          width={844}
-          height={198}
-          priority
-          draggable={false}
-          className="w-[min(60vw,900px)] mix-blend-screen select-none [filter:invert(1)_hue-rotate(180deg)_contrast(1.15)]"
-        />
-      </div>
+        {/* The wordmark, set as live text rather than the source PNG. That
+            art is 3D extruded lettering on a light card; inverting it to
+            composite onto the photo also inverts its drop-shadows into a
+            hard white glow around every glyph, which the reference doesn't
+            have. Montserrat 700 reproduces the flat lockup directly. */}
+        <p className="text-[clamp(2.75rem,4.6vw,4.5rem)] leading-none font-bold tracking-[-0.02em] whitespace-nowrap text-[#c9d3dc] select-none">
+          Zone<span className="text-[#7fb2d8]">Maestro</span>
+        </p>
 
-      {/* Bottom-left: headline + illustrative zone status row. */}
-      <div className="absolute bottom-0 left-0 max-w-2xl p-10">
-        <h1 className="text-[2.75rem] leading-[1.08] font-bold tracking-tight whitespace-nowrap text-white">
-          Music that moves with your space
-        </h1>
-        <div className="mt-8 flex flex-wrap items-center gap-x-7 gap-y-3">
-          {HERO_ZONES.map((z) => (
-            <div key={z.name} className="flex items-center gap-2 text-[13px]">
-              <span aria-hidden className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: z.color }} />
-              <span className="font-medium text-white">{z.name}</span>
-              <span className="text-gray-400">{z.status}</span>
-            </div>
-          ))}
+        {/* Headline + illustrative zone status row. */}
+        <div className="max-w-2xl">
+          <h1 className="text-[2.75rem] leading-[1.08] font-bold tracking-tight whitespace-nowrap text-white">
+            Music that moves with your space
+          </h1>
+          <div className="mt-8 flex flex-wrap items-center gap-x-7 gap-y-3">
+            {HERO_ZONES.map((z) => (
+              <div key={z.name} className="flex items-center gap-2 text-[13px]">
+                <span aria-hidden className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: z.color }} />
+                <span className="font-medium text-white">{z.name}</span>
+                <span className="text-gray-400">{z.status}</span>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </section>

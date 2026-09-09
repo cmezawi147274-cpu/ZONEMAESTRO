@@ -2,7 +2,6 @@
 
 import { useState } from "react"
 import Image from "next/image"
-import Link from "next/link"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import * as z from "zod"
@@ -51,18 +50,17 @@ export default function LoginPage() {
   }
 
   return (
-    // Scoped font fix, not a globals.css change: html{font-family:var(--font-sans)}
+    // Scoped font, not a globals.css change: html{font-family:var(--font-sans)}
     // resolves to nothing app-wide — `--font-sans` in the @theme inline block
     // (globals.css) is circularly self-referenced with no real value defined
     // anywhere, so every page silently falls back to the browser's default
     // serif. Pre-existing, not introduced by this work — out of scope to fix
-    // globally here (would touch shared theme config), but the login page
-    // can't ship serif, so it points `font-family` straight at the Geist
-    // variable next/font actually sets on <html> (--font-geist-sans), which
-    // does have a real value.
+    // globally here (would touch shared theme config). This screen names its
+    // face directly: `--font-logo` (Montserrat, set on <html> by next/font in
+    // layout.tsx) is what the design reference typesets the whole login in.
     <div
       className="grid min-h-screen bg-[#111111] text-white lg:grid-cols-[7fr_3fr]"
-      style={{ fontFamily: "var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif" }}
+      style={{ fontFamily: "var(--font-logo), ui-sans-serif, system-ui, sans-serif" }}
     >
       <LoginHero />
 
@@ -73,12 +71,17 @@ export default function LoginPage() {
         <div className="login-form-enter w-full max-w-sm">
           <div className="mb-10 lg:hidden">
             <Image
-              src="/branding/login-mark.jpg"
+              src="/branding/login-mark-trimmed.png"
               alt="ZoneMaestro — Precision Audio Orchestration"
-              width={300}
-              height={300}
+              width={467}
+              height={425}
               priority
-              className="w-[140px] mix-blend-screen contrast-125 select-none"
+              draggable={false}
+              className="h-auto w-[150px] max-w-full select-none"
+              style={{
+                mixBlendMode: "screen",
+                filter: "contrast(1.25) drop-shadow(0 8px 22px rgba(0, 0, 0, 0.5))",
+              }}
             />
           </div>
 
@@ -191,14 +194,6 @@ export default function LoginPage() {
               </div>
             </div>
           )}
-
-          <p className="mt-6 text-center text-xs text-gray-500">
-            Windows MusicServer administrator?{" "}
-            <Link href="/servers" className="font-medium text-gray-300 underline underline-offset-2 hover:text-[#34b4f5]">
-              Manage server pairing
-            </Link>{" "}
-            after signing in.
-          </p>
         </div>
       </section>
     </div>
