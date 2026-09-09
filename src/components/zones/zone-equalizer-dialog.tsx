@@ -2,26 +2,45 @@
 
 import { useEffect, useRef, useState } from "react"
 import type { CSSProperties } from "react"
+import { Check, Loader2, Save, Trash2, X } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger } from "@/components/ui/dialog"
 import { EqualizerCurve } from "@/components/zones/equalizer-curve"
 import { EqualizerModule } from "@/components/zones/equalizer-module"
 import { EQ_PRESETS, CUSTOM_PRESET_ID, findPreset, defaultEqualizer, clampDb, clampAmount } from "@/lib/equalizer/presets"
-import type { Zone, ZoneEqualizerSettings, ZoneEqualizerModule as EqModule } from "@/lib/api/types"
+import {
+  useEqualizerPresets,
+  useSaveEqualizerPreset,
+  useDeleteEqualizerPreset,
+} from "@/hooks/use-equalizer-presets"
+import type { Zone, ZoneEqualizerSettings, ZoneEqualizerModule as EqModule, SavedEqPreset } from "@/lib/api/types"
+
+/** Saved presets are addressed as "saved:<id>" in the Select so a user
+ * curve called "Flat" can never collide with the built-in `flat`. */
+const SAVED_PREFIX = "saved:"
 
 /** The zone card's compact "Equalizer" row shows this as its right-aligned
  * state — same idea as the Schedule row previewing its own contents. */
 export function equalizerSummary(equalizer: ZoneEqualizerSettings | null): string {
   if (!equalizer || !equalizer.enabled) return "Off"
   if (equalizer.presetId === CUSTOM_PRESET_ID) return "Custom"
+  // A saved (`saved:<id>`) preset resolves to no built-in and reads as
+  // "Custom" here: the card deliberately doesn't fetch the org's preset
+  // list, since one query per mounted zone card would fan out across the
+  // whole zones page. The dialog itself shows the real name.
   return findPreset(equalizer.presetId)?.name ?? "Custom"
 }
 
-const PRESET_SELECT_ITEMS = Object.fromEntries([
-  ...EQ_PRESETS.map((p) => [p.id, p.name] as const),
-  [CUSTOM_PRESET_ID, "Custom"] as const,
-])
+function presetSelectItems(saved: SavedEqPreset[]) {
+  return Object.fromEntries([
+    ...EQ_PRESETS.map((p) => [p.id, p.name] as const),
+    ...saved.map((p) => [`${SAVED_PREFIX}${p.id}`, p.name] as const),
+    [CUSTOM_PRESET_ID, "Custom"] as const,
+  ])
+}
 
 const SAVE_DEBOUNCE_MS = 450
 
@@ -54,6 +73,14 @@ export function ZoneEqualizerDialog({
 }) {
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState<ZoneEqualizerSettings>(() => zone.equalizer ?? defaultEqualizer())
+
+  // Only while open: every zone card mounts one of these dialogs, so an
+  // unconditional query would be one request per card on the zones page.
+  const { data: savedPresets } = useEqualizerPresets({ enabled: open })
+  const saved = savedPresets ?? []
+  const savePreset = useSaveEqualizerPreset()
+  const deletePreset = useDeleteEqualizerPreset()
+  const [nameDraft, setNameDraft] = useState<string | null>(null)
 
   // Latest-value refs for the debounced save below, kept in sync after
   // every render (not written during render — refs are for effects/event
@@ -95,6 +122,7 @@ export function ZoneEqualizerDialog({
   }
 
   function handleOpenChange(next: boolean) {
+    setNameDraft(null)
     if (next) {
       skipNextDebounce.current = true
       setDraft(zone.equalizer ?? defaultEqualizer())
@@ -124,8 +152,33 @@ export function ZoneEqualizerDialog({
 
   function selectPreset(id: string | null) {
     if (!id) return
-    const preset = findPreset(id)
-    setDraft((d) => ({ ...d, presetId: id, bands: preset ? [...preset.bands] : d.bands }))
+    const bands = id.startsWith(SAVED_PREFIX)
+      ? saved.find((p) => `${SAVED_PREFIX}${p.id}` === id)?.bands
+      : findPreset(id)?.bands
+    setDraft((d) => ({ ...d, presetId: id, bands: bands ? [...bands] : d.bands }))
+  }
+
+  const activeSaved = draft.presetId.startsWith(SAVED_PREFIX)
+    ? saved.find((p) => `${SAVED_PREFIX}${p.id}` === draft.presetId)
+    : undefined
+
+  async function commitSave() {
+    const name = (nameDraft ?? "").trim()
+    if (!name) return
+    const preset = await savePreset.mutateAsync({ name, bands: draft.bands }).catch(() => null)
+    if (!preset) return
+    // Point the draft at the freshly saved curve, so the Select stops
+    // reading "Custom" the moment it's been named and stored.
+    setDraft((d) => ({ ...d, presetId: `${SAVED_PREFIX}${preset.id}` }))
+    setNameDraft(null)
+  }
+
+  async function removeActiveSaved() {
+    if (!activeSaved) return
+    await deletePreset.mutateAsync(activeSaved.id).catch(() => null)
+    // Its bands stay exactly as they are — deleting the *name* shouldn't
+    // silently re-EQ a live room. The curve simply becomes "Custom" again.
+    setDraft((d) => ({ ...d, presetId: CUSTOM_PRESET_ID }))
   }
 
   return (
@@ -152,23 +205,104 @@ export function ZoneEqualizerDialog({
         </DialogHeader>
 
         <div className="space-y-4">
-          <Select value={draft.presetId} onValueChange={selectPreset} items={PRESET_SELECT_ITEMS} disabled={!draft.enabled}>
-            <SelectTrigger className="w-48 border-white/10 bg-white/[0.03] text-white" size="sm">
-              <SelectValue placeholder="Preset" />
-            </SelectTrigger>
-            {/* Select portals its popup independently of DialogContent (see
-                src/components/ui/select.tsx), so neither the `dark` class
-                nor the CSS-variable overrides above reach it — themed
-                explicitly here instead. */}
-            <SelectContent className="border-white/10 bg-[#101215] text-white">
-              {EQ_PRESETS.map((p) => (
-                <SelectItem key={p.id} value={p.id}>
-                  {p.name}
-                </SelectItem>
-              ))}
-              <SelectItem value={CUSTOM_PRESET_ID}>Custom</SelectItem>
-            </SelectContent>
-          </Select>
+          <div className="flex flex-wrap items-center gap-2">
+            <Select
+              value={draft.presetId}
+              onValueChange={selectPreset}
+              items={presetSelectItems(saved)}
+              disabled={!draft.enabled}
+            >
+              <SelectTrigger className="w-48 border-white/10 bg-white/[0.03] text-white" size="sm">
+                <SelectValue placeholder="Preset" />
+              </SelectTrigger>
+              {/* Select portals its popup independently of DialogContent (see
+                  src/components/ui/select.tsx), so neither the `dark` class
+                  nor the CSS-variable overrides above reach it — themed
+                  explicitly here instead. */}
+              <SelectContent className="border-white/10 bg-[#101215] text-white">
+                {EQ_PRESETS.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {p.name}
+                  </SelectItem>
+                ))}
+                {saved.map((p) => (
+                  <SelectItem key={p.id} value={`${SAVED_PREFIX}${p.id}`}>
+                    {p.name}
+                  </SelectItem>
+                ))}
+                <SelectItem value={CUSTOM_PRESET_ID}>Custom</SelectItem>
+              </SelectContent>
+            </Select>
+
+            {nameDraft === null ? (
+              <>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={!draft.enabled}
+                  onClick={() => setNameDraft(activeSaved?.name ?? "")}
+                  className="border-white/10 bg-white/[0.03] text-white hover:bg-white/[0.07] hover:text-white"
+                >
+                  <Save className="size-3.5" />
+                  Save preset
+                </Button>
+                {activeSaved && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    disabled={!draft.enabled || deletePreset.isPending}
+                    onClick={removeActiveSaved}
+                    aria-label={`Delete preset ${activeSaved.name}`}
+                    className="text-white/50 hover:bg-white/[0.07] hover:text-white"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                )}
+              </>
+            ) : (
+              <div className="flex items-center gap-1.5">
+                <Input
+                  autoFocus
+                  value={nameDraft}
+                  maxLength={40}
+                  placeholder="Preset name"
+                  aria-label="Preset name"
+                  onChange={(e) => setNameDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault()
+                      void commitSave()
+                    } else if (e.key === "Escape") {
+                      e.preventDefault()
+                      setNameDraft(null)
+                    }
+                  }}
+                  className="h-8 w-44 border-white/10 bg-white/[0.03] text-sm text-white placeholder:text-white/30"
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={!nameDraft.trim() || savePreset.isPending}
+                  onClick={() => void commitSave()}
+                >
+                  {savePreset.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
+                  Save
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  aria-label="Cancel saving preset"
+                  onClick={() => setNameDraft(null)}
+                  className="text-white/50 hover:bg-white/[0.07] hover:text-white"
+                >
+                  <X className="size-3.5" />
+                </Button>
+              </div>
+            )}
+          </div>
 
           <EqualizerCurve zoneName={zone.name} bands={draft.bands} enabled={draft.enabled} onBandChange={updateBand} />
 

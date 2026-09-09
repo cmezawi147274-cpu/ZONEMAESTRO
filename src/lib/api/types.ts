@@ -446,3 +446,14 @@ export interface PrayerScheduleEvent {
   /** ISO instant (UTC) the pause ends (startAt + pauseDurationMinutes). */
   endAt: string
 }
+
+/** An operator-saved EQ curve, shared across the organization — the
+ * user-defined counterpart to the built-in curves in
+ * src/lib/equalizer/presets.ts. Only the 10 band gains are stored; the
+ * bassBoost/loudness/virtualizer trims stay per-zone. */
+export interface SavedEqPreset {
+  id: string
+  name: string
+  bands: number[]
+  createdAt: string
+}

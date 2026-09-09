@@ -11,6 +11,7 @@ import organizationsRoutes from "./routes/organizations.js"
 import locationsRoutes from "./routes/locations.js"
 import serversRoutes from "./routes/servers.js"
 import zonesRoutes from "./routes/zones.js"
+import equalizerPresetsRoutes from "./routes/equalizer-presets.js"
 import commandsRoutes from "./routes/commands.js"
 import musicRoutes from "./routes/music.js"
 import playlistsRoutes from "./routes/playlists.js"
@@ -54,6 +55,7 @@ await app.register(
     await api.register(locationsRoutes)
     await api.register(serversRoutes)
     await api.register(zonesRoutes)
+    await api.register(equalizerPresetsRoutes)
     await api.register(commandsRoutes)
     await api.register(musicRoutes)
     await api.register(playlistsRoutes)

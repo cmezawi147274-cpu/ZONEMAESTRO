@@ -171,8 +171,31 @@ model Organization {
   servers      MusicServer[]
   playlists    Playlist[]
   prayerConfig PrayerConfig?
+  eqPresets    EqPreset[]
 
   @@index([slug])
+}
+
+/// An operator-saved equalizer curve, shared across the organization — the
+/// user-defined counterpart to the built-in curves hard-coded in
+/// src/lib/equalizer/presets.ts (Flat, Dinner, Bar, Speech, Outdoor). Only
+/// the 10 band gains are stored: bassBoost/loudness/virtualizer are
+/// per-zone hardware-ish trims rather than part of a curve's identity, and
+/// the built-in presets don't carry them either.
+model EqPreset {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  /// Exactly 10 gains in dB, same fixed band order as EQ_BANDS.
+  bands          Json
+  createdById    String?
+  createdAt      DateTime     @default(now())
+
+  /// Two operators can't end up with two different curves both called
+  /// "Friday Night" in the same org — saving that name overwrites instead.
+  @@unique([organizationId, name])
+  @@index([organizationId])
 }
 
 model Location {

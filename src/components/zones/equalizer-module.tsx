@@ -2,28 +2,43 @@
 
 import { Switch } from "@/components/ui/switch"
 import { Slider } from "@/components/ui/slider"
+import { clampAmount } from "@/lib/equalizer/presets"
 import type { ZoneEqualizerModule } from "@/lib/api/types"
+
+// The arc's endpoints are 72 units apart, so its radius is 72/2 = 36. It
+// was previously drawn as `A 34 34` and dashed against a circumference of
+// pi*34: an r=34 semicircle only spans 68 units, which cannot reach the
+// given endpoints, so SVG scales the radius up to 36 to make it fit (per
+// spec, "out-of-range radii"). The path was therefore pi*36 long while the
+// dash array claimed pi*34 — 5.6% short, which left the gauge visibly
+// unfilled at 100%. Radius is now stated correctly, and `pathLength`
+// normalises the arc to 100 units so the dash math is a plain percentage
+// and stays right regardless of any future geometry change.
+const ARC = "M 6 42 A 36 36 0 0 1 78 42"
 
 /** A semicircular gauge (0-100), arc drawn accent-colored up to `amount`,
  * the rest a hairline track. Purely decorative — the real, accessible
  * control is the Slider rendered below it. */
 function Gauge({ amount, active }: { amount: number; active: boolean }) {
-  const r = 34
-  const circumference = Math.PI * r // half circle
-  const offset = circumference * (1 - amount / 100)
+  const filled = clampAmount(amount)
   return (
     <svg aria-hidden viewBox="0 0 84 46" className="mx-auto h-12 w-20 overflow-visible">
-      <path d="M 6 42 A 34 34 0 0 1 78 42" fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth={6} strokeLinecap="round" />
-      <path
-        d="M 6 42 A 34 34 0 0 1 78 42"
-        fill="none"
-        stroke={active ? "#5ec8f7" : "rgba(255,255,255,0.35)"}
-        strokeWidth={6}
-        strokeLinecap="round"
-        strokeDasharray={circumference}
-        strokeDashoffset={offset}
-        className="transition-[stroke-dashoffset] duration-200 ease-out motion-reduce:transition-none"
-      />
+      <path d={ARC} fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth={6} strokeLinecap="round" />
+      {/* A zero-length dash still paints a dot under `strokeLinecap="round"`,
+          which read as a stuck 1% at the left end — so 0 draws nothing. */}
+      {filled > 0 && (
+        <path
+          d={ARC}
+          fill="none"
+          stroke={active ? "#5ec8f7" : "rgba(255,255,255,0.35)"}
+          strokeWidth={6}
+          strokeLinecap="round"
+          pathLength={100}
+          strokeDasharray={100}
+          strokeDashoffset={100 - filled}
+          className="transition-[stroke-dashoffset] duration-200 ease-out motion-reduce:transition-none"
+        />
+      )}
     </svg>
   )
 }
