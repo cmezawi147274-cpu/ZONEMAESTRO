@@ -18,6 +18,7 @@ import { env } from "../lib/env.js"
 import { badRequest, notFound, HttpError } from "../lib/http-error.js"
 import { requireAgent, generateAgentToken, sha256Hex } from "../lib/agent-auth.js"
 import { hashPairingCode, normalizePairingCode } from "../lib/pairing.js"
+import { seededShuffle } from "../lib/shuffle.js"
 import { markAgentSeen, resolveAck, forgetAgent } from "../lib/agent-registry.js"
 import { emitEvent } from "../realtime.js"
 import { pushActivity } from "../lib/activity.js"
@@ -286,6 +287,28 @@ export default async function agentRoutes(app: FastifyInstance) {
     const command = await prisma.remoteCommand.findUnique({ where: { id: commandId } })
     if (!command || command.serverId !== ctx.serverId) throw notFound("Command")
 
+    // A command already in a terminal state (the cloud gave up and recorded
+    // TIMEOUT, or a duplicate/delayed ack repeats a status already
+    // recorded) must not be re-resolved by an ack that arrives after the
+    // fact. Root cause this closed off: SET_EQ writes straight to
+    // EqualizerAPO's config.txt, and firing one from the portal while the
+    // Windows side is still mid-write/reload on a *previous* one throws
+    // EBUSY there; the agent's own retry-with-backoff can then run long
+    // enough that its eventual SUCCESS ack lands after the cloud's ack
+    // wait already expired and recorded TIMEOUT. Before this check, that
+    // late ack silently flipped the row to SUCCESS — and since a
+    // SUCCESS ack usually carries no resultMessage of its own, the `??`
+    // fallback below kept the *TIMEOUT's* "No response ... within Xms"
+    // text attached to a status that now claimed to have worked. Found by
+    // querying the command history: 22 rows married exactly that
+    // contradiction. The real fix (serializing/atomically writing
+    // config.txt) belongs on the Windows side; this only stops the cloud
+    // from lying about which one actually happened.
+    if (["SUCCESS", "FAILED", "TIMEOUT"].includes(command.status)) {
+      markAgentSeen(ctx.serverId)
+      return reply.send({ ok: true, note: "Command already resolved; this ack was not applied." })
+    }
+
     const resultMessage = str(body, "resultMessage") ?? null
     const now = new Date()
     const updated = await prisma.remoteCommand.update({
@@ -514,7 +537,14 @@ export default async function agentRoutes(app: FastifyInstance) {
           localZoneId: zone.localZoneId ?? zone.id,
           zoneId: zone.id,
           playlistId: zone.currentPlaylistId,
-          trackIds: playlist ? playlist.tracks.map((t) => t.trackId) : [],
+          // Randomised, not the order tracks were added — seeded on
+          // zone+playlist so it stays put while this assignment lasts.
+          trackIds: playlist
+            ? seededShuffle(
+                playlist.tracks.map((t) => t.trackId),
+                `${zone.id}:${playlist.id}`
+              )
+            : [],
           excludedTrackIds: zone.excludedTrackIds,
           currentTrackId: zone.currentTrackId,
         }
@@ -564,7 +594,7 @@ export default async function agentRoutes(app: FastifyInstance) {
         localZoneId: localOf.get(s.zoneId) ?? s.zoneId,
         zoneId: s.zoneId,
         playlistId: s.playlistId,
-        trackIds: tracksByPlaylist.get(s.playlistId) ?? [],
+        trackIds: seededShuffle(tracksByPlaylist.get(s.playlistId) ?? [], `${s.zoneId}:${s.playlistId}`),
         excludedTrackIds: excludedOf.get(s.zoneId) ?? [],
         name: s.name,
         startTime: s.startTime,

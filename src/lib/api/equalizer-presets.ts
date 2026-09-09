@@ -22,7 +22,7 @@ export const equalizerPresetsApi = {
   /** Saving over an existing name replaces that curve — the backend upserts
    * on (organizationId, name), so the UI can offer one "Save" action
    * instead of separate create/overwrite paths. */
-  async save(name: string, bands: number[]): Promise<SavedEqPreset> {
+  async save(name: string, bands: number[], locationId?: string): Promise<SavedEqPreset> {
     if (isMockMode) {
       await delay()
       const existing = mockPresets.find((p) => p.name === name)
@@ -39,7 +39,9 @@ export const equalizerPresetsApi = {
       mockPresets.push(preset)
       return { ...preset }
     }
-    return apiClient.post<SavedEqPreset>("/equalizer-presets", { name, bands })
+    // locationId lets the backend resolve the owning organization for a
+    // SUPER_ADMIN, who has no organizationId of their own.
+    return apiClient.post<SavedEqPreset>("/equalizer-presets", { name, bands, locationId })
   },
 
   async remove(id: string): Promise<void> {

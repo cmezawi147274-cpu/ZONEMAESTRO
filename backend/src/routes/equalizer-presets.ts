@@ -46,7 +46,7 @@ export default async function equalizerPresetsRoutes(app: FastifyInstance) {
     return reply.send(presets.map(serialize))
   })
 
-  app.post<{ Body: { name?: unknown; bands?: unknown; organizationId?: string } }>(
+  app.post<{ Body: { name?: unknown; bands?: unknown; organizationId?: string; locationId?: string } }>(
     "/equalizer-presets",
     async (request, reply) => {
       const user = requireUser(request)
@@ -58,8 +58,21 @@ export default async function equalizerPresetsRoutes(app: FastifyInstance) {
       if (name.length > 40) throw badRequest("Preset names are limited to 40 characters.")
       const bands = normalizeBands(request.body?.bands)
 
-      const organizationId = scope.organizationId ?? request.body?.organizationId
-      if (!organizationId) throw badRequest("organizationId is required for this account.")
+      // A SUPER_ADMIN has no organizationId of their own, so the org comes
+      // from the zone the dialog was opened on: its location owns the
+      // organization. Same rule as POST /servers — never trust an
+      // organizationId straight off the body for a scoped role, or an Org
+      // Admin could plant a preset in another tenant.
+      let organizationId = scope.organizationId ?? undefined
+      if (!organizationId && request.body?.locationId) {
+        const location = await prisma.location.findUnique({ where: { id: request.body.locationId } })
+        if (!location) throw notFound("Location")
+        organizationId = location.organizationId
+      }
+      organizationId ??= request.body?.organizationId
+      if (!organizationId) {
+        throw badRequest("Could not determine which organization this preset belongs to.")
+      }
       if (scope.organizationId && organizationId !== scope.organizationId) throw forbidden()
 
       // Re-saving a name replaces that curve rather than erroring, so

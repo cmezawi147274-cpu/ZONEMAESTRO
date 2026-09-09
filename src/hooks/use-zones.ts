@@ -56,11 +56,30 @@ export function useZoneControls(zoneId: string, serverId: string) {
 
   const send = (label: string, action: () => Promise<unknown>) =>
     command.mutateAsync(action).then(() => toast.success(`${label} applied`))
-  // Same mutation, same real command path, same error toast — just no
-  // success toast. Used only by setEqualizer below, which fires on a
-  // debounce while a slider is being dragged; a toast per autosave would
-  // be noise. (Errors still surface via `command`'s own onError.)
-  const sendSilent = (action: () => Promise<unknown>) => command.mutateAsync(action)
+  /** SET_EQ specifically retries: a command needs the agent's poll cycle
+   * (COMMAND_POLL_MS, ~1.5s) plus real internet round-trip to ack within
+   * AGENT_COMMAND_ACK_TIMEOUT_MS, and a single missed poll window is
+   * enough to time it out — which then leaves the zone's `enabled`/bands
+   * silently un-persisted (the dialog's own local `draft` still shows the
+   * change; only the server's copy is stale, so it reverts the moment the
+   * dialog is reopened or the zone card re-reads `zone.equalizer`). SET_EQ
+   * is idempotent — replaying the same curve is always safe — so retrying
+   * costs nothing a fresh manual retry wouldn't also do. Play/Pause/etc.
+   * are left alone: retrying a transport command after a timeout could
+   * double an action whose effect isn't simply "reapply the same state".
+   */
+  async function sendEqualizerWithRetry(action: () => Promise<unknown>, attempts = 3): Promise<unknown> {
+    let lastError: unknown
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        return await command.mutateAsync(action)
+      } catch (err) {
+        lastError = err
+        if (attempt < attempts) await new Promise((r) => setTimeout(r, attempt * 600))
+      }
+    }
+    throw lastError
+  }
 
   return {
     isPending: command.isPending,
@@ -74,9 +93,10 @@ export function useZoneControls(zoneId: string, serverId: string) {
     unmute: () => send("Unmute", () => zonesApi.unmute(zoneId, serverId, issuedBy)),
     /** Rides the exact same portal -> /commands -> agent -> local-api path
      * as setVolume — see src/lib/api/zones.ts `setEqualizer` and
-     * agent-bridge/lib/local-api.js. */
+     * agent-bridge/lib/local-api.js. Retries on timeout; see
+     * sendEqualizerWithRetry above. */
     setEqualizer: (equalizer: ZoneEqualizerSettings) =>
-      sendSilent(() => zonesApi.setEqualizer(zoneId, serverId, equalizer, issuedBy)),
+      sendEqualizerWithRetry(() => zonesApi.setEqualizer(zoneId, serverId, equalizer, issuedBy)),
   }
 }
 

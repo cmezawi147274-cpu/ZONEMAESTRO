@@ -96,6 +96,20 @@ export function ZoneEqualizerDialog({
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const skipNextDebounce = useRef(true)
 
+  // Visible, persistent save state — not just the transient error toast,
+  // which is easy to miss while dragging a slider. This is what lets the
+  // operator actually see that "On" (or a band change) reached the server,
+  // rather than discovering it reverted the next time the dialog opens.
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle")
+
+  function runSave() {
+    setSaveStatus("saving")
+    setEqualizerRef.current(draftRef.current).then(
+      () => setSaveStatus("saved"),
+      () => setSaveStatus("error") // useZoneControls already toasts the error; this just keeps it visible.
+    )
+  }
+
   // Debounced autosave: local state updates the UI immediately on every
   // change; the actual command fires this long after the last one. Skips
   // the render right after opening/resetting the dialog, which sets
@@ -105,8 +119,9 @@ export function ZoneEqualizerDialog({
       skipNextDebounce.current = false
       return
     }
+    setSaveStatus("idle")
     const t = setTimeout(() => {
-      setEqualizerRef.current(draftRef.current)
+      runSave()
       saveTimerRef.current = null
     }, SAVE_DEBOUNCE_MS)
     saveTimerRef.current = t
@@ -117,7 +132,7 @@ export function ZoneEqualizerDialog({
     if (saveTimerRef.current != null) {
       clearTimeout(saveTimerRef.current)
       saveTimerRef.current = null
-      setEqualizerRef.current(draftRef.current)
+      runSave()
     }
   }
 
@@ -125,6 +140,7 @@ export function ZoneEqualizerDialog({
     setNameDraft(null)
     if (next) {
       skipNextDebounce.current = true
+      setSaveStatus("idle")
       setDraft(zone.equalizer ?? defaultEqualizer())
     } else {
       flushPendingSave()
@@ -165,7 +181,9 @@ export function ZoneEqualizerDialog({
   async function commitSave() {
     const name = (nameDraft ?? "").trim()
     if (!name) return
-    const preset = await savePreset.mutateAsync({ name, bands: draft.bands }).catch(() => null)
+    const preset = await savePreset
+      .mutateAsync({ name, bands: draft.bands, locationId: zone.locationId })
+      .catch(() => null)
     if (!preset) return
     // Point the draft at the freshly saved curve, so the Select stops
     // reading "Custom" the moment it's been named and stored.
@@ -197,7 +215,25 @@ export function ZoneEqualizerDialog({
                 Shapes this zone&apos;s own output on its Music Server. Turning it off bypasses every band, flat.
               </DialogDescription>
             </div>
-            <div className="flex shrink-0 items-center gap-2">
+            <div className="flex shrink-0 items-center gap-3">
+              {/* Persistent, not a toast that can be missed mid-drag: this
+                  is the only thing telling the operator whether "On" (or a
+                  band change) actually reached the Music Server, versus
+                  just updating this dialog's own local draft. */}
+              {saveStatus === "error" ? (
+                <button
+                  type="button"
+                  onClick={runSave}
+                  className="text-[11px] font-medium text-red-400 underline underline-offset-2 hover:text-red-300"
+                >
+                  Not saved — retry
+                </button>
+              ) : (
+                <span className={"text-[11px] font-medium " + (saveStatus === "saving" ? "text-white/40" : "text-white/30")}>
+                  {saveStatus === "saving" && "Saving…"}
+                  {saveStatus === "saved" && "Saved"}
+                </span>
+              )}
               <span className="text-xs font-medium text-white/60">{draft.enabled ? "On" : "Off"}</span>
               <Switch checked={draft.enabled} onCheckedChange={(v) => setDraft((d) => ({ ...d, enabled: v }))} />
             </div>

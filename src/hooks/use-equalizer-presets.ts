@@ -21,7 +21,8 @@ export function useEqualizerPresets(options?: { enabled?: boolean }) {
 export function useSaveEqualizerPreset() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ name, bands }: { name: string; bands: number[] }) => equalizerPresetsApi.save(name, bands),
+    mutationFn: ({ name, bands, locationId }: { name: string; bands: number[]; locationId?: string }) =>
+      equalizerPresetsApi.save(name, bands, locationId),
     onSuccess: (preset) => {
       queryClient.invalidateQueries({ queryKey: KEY })
       toast.success(`Preset “${preset.name}” saved`)
