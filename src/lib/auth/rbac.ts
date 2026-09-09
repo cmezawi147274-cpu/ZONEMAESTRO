@@ -132,3 +132,22 @@ export function canAny(role: Role | undefined | null, permissions: Permission[])
 export function landingRoute(role: Role | undefined | null): string {
   return role === "VIEWER" ? "/zones" : "/dashboard"
 }
+
+/**
+ * QA review Option 4: validates the `?from=` query param src/proxy.ts sets
+ * on a redirect-to-login before it's ever used as a post-login redirect
+ * target — see src/app/login/page.tsx and src/hooks/use-auth.ts. Without
+ * this, `from` was read nowhere at all (a deep link's destination was
+ * silently lost, always landing on the role's default route instead); the
+ * fix is this validator, not a raw redirect, because trusting it unchecked
+ * is exactly how an open redirect gets introduced. Only a genuine in-app,
+ * same-origin path is accepted — a protocol-relative ("//evil.com"),
+ * backslash-based ("/\evil.com", which some browsers resolve like "//"),
+ * or absolute ("https://evil.com") value returns null, and the caller
+ * falls back to `landingRoute()` exactly as before.
+ */
+export function safeRedirectTarget(path: string | null | undefined): string | null {
+  if (!path) return null
+  if (!path.startsWith("/") || path.startsWith("//") || path.includes("\\") || path.includes("://")) return null
+  return path
+}

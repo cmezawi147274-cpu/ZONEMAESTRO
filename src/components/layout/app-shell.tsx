@@ -2,6 +2,7 @@
 
 import { SidebarNav } from "@/components/layout/sidebar"
 import { Topbar } from "@/components/layout/topbar"
+import { CommandPalette } from "@/components/layout/command-palette"
 import { usePrayerSchedulerBootstrap } from "@/hooks/use-prayer"
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -12,6 +13,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex min-h-screen w-full">
+      {/* QA review Option 7: mounted once for the whole authenticated
+          portal (not per-page) so ⌘K/Ctrl+K works from anywhere. */}
+      <CommandPalette />
       <aside className="hidden w-64 shrink-0 border-r lg:block">
         <div className="fixed h-screen w-64">
           <SidebarNav />

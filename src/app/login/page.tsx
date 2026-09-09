@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/form"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { useAuth } from "@/hooks/use-auth"
+import { safeRedirectTarget } from "@/lib/auth/rbac"
 import { isMockMode } from "@/lib/config"
 import { DEMO_CREDENTIALS, DEMO_PASSWORD } from "@/lib/mock/seed"
 import { cn } from "@/lib/utils"
@@ -43,7 +44,17 @@ export default function LoginPage() {
 
   async function onSubmit(values: FormValues) {
     try {
-      await login(values)
+      // QA review Option 4: src/proxy.ts sets `?from=<pathname>` when it
+      // redirects a signed-out deep link to /login, but nothing ever read
+      // it back — a operator following a shared link always landed on
+      // their role's generic default page instead. Read directly off
+      // window.location rather than next/navigation's useSearchParams()
+      // so this stays a plain client-side read at submit time, with no
+      // Suspense-boundary requirement on the page. safeRedirectTarget
+      // rejects anything but an in-app relative path, so a crafted `from`
+      // can't turn this into an open redirect.
+      const from = typeof window !== "undefined" ? safeRedirectTarget(new URLSearchParams(window.location.search).get("from")) : null
+      await login(values, from ?? undefined)
     } catch {
       /* surfaced via loginError */
     }

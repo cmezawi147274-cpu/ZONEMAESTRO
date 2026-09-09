@@ -17,6 +17,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { SidebarNav } from "@/components/layout/sidebar"
 import { ConnectionPill } from "@/components/layout/connection-pill"
+import { ThemeToggle } from "@/components/layout/theme-toggle"
 import { useAuth } from "@/hooks/use-auth"
 import { useAlerts } from "@/hooks/use-monitoring"
 import { useRealtimeConnection } from "@/hooks/use-realtime"
@@ -49,6 +50,8 @@ export function Topbar() {
       <div className="flex-1" />
 
       <ConnectionPill state={connectionState} />
+
+      <ThemeToggle />
 
       {canReadAlerts && (
         <Button

@@ -151,11 +151,22 @@ proxy.ts                    Route protection (Next.js 16's renamed Middleware)
 |---|---|
 | `SUPER_ADMIN` | Full access across all organizations, including user management |
 | `ORGANIZATION_ADMIN` | Full management of their own organization's locations, servers, music, playlists, schedules |
-| `LOCATION_MANAGER` | Zone control, scheduling and sync for their assigned locations |
+| `LOCATION_MANAGER` | Zone control, scheduling and sync for their assigned locations; can also invite/manage **Viewer** accounts scoped to that same location |
 | `VIEWER` | Read-only access |
 
 The permission matrix lives in `src/lib/auth/rbac.ts` and is consumed by the
 `<RoleGate>` component and `useAuth().can(...)` throughout the UI.
+
+`users:manage` is granted to `LOCATION_MANAGER`, not just `ORGANIZATION_ADMIN`
+and `SUPER_ADMIN` — easy to miss reading this table alone, since it reads
+like a permission a mid-tier role shouldn't hold. It's intentionally scoped
+down, not a broader grant than it looks: `backend/src/routes/users.ts`
+restricts a Location Manager to inviting/editing/deleting only accounts at
+their own `locationId` (`visibilityWhere`), and only into a role strictly
+below their own rank (`RANK`) — in practice, only **Viewer** accounts for
+the venue they already manage. A Location Manager can no more create another
+Location Manager, or reach a user at a different venue, than they could
+before this existed.
 
 ## Prayer Mode
 
@@ -350,7 +361,7 @@ STORAGE_SECRET_ACCESS_KEY=<strong random value>
 docker compose up -d --build
 
 # The real cloud: portal + backend + Postgres
-docker compose --profile full up -d --build
+GIT_COMMIT=$(git rev-parse --short HEAD) docker compose --profile full up -d --build
 
 # Apply database migrations (and, on a fresh database, seed the first admin)
 docker compose --profile migrate run --rm backend-migrate
@@ -360,14 +371,22 @@ docker compose --profile migrate run --rm backend-migrate npm run db:seed
 For the `full` profile, set `NEXT_PUBLIC_USE_MOCK_API=false` in `.env` before
 building — those `NEXT_PUBLIC_*` values are inlined into the client bundle at
 build time, so changing them later requires a rebuild, not just a restart.
+The backend image is exactly the same way: a code change (like an edit to
+anything under `backend/src`) takes no effect until it's rebuilt into a new
+image and the container is recreated — restarting the existing container,
+or merely committing the change, does neither. `GIT_COMMIT` above (optional,
+defaults to `unknown`) bakes the exact commit into the image so this is
+verifiable afterward instead of assumed — see `/health` below.
 
 The portal listens on `3000` and the backend on `4000` by default (`APP_PORT`
-and `BACKEND_PORT` in `.env`). Verify:
+and `BACKEND_PORT` in `.env`). Verify — `commit` should match
+`git rev-parse --short HEAD` on this checkout; if it doesn't, the container
+is stale and needs the build+recreate step above run again:
 
 ```bash
 docker compose ps
 curl -I http://localhost:3000
-curl http://localhost:4000/health
+curl http://localhost:4000/health   # {"ok":true,"commit":"<short sha>"}
 ```
 
 Uploaded audio lives in the `music-data` volume and is served to each Windows

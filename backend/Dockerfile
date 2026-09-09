@@ -53,6 +53,20 @@ COPY --from=builder /app/prisma ./prisma
 RUN mkdir -p /app/data/music && chown -R node:node /app/data
 ENV MUSIC_STORAGE_DIR=/app/data/music
 
+# QA review Option 6: baked in at build time (there's no way to recover it
+# at runtime — the running container has no .git dir) so GET /health can
+# report exactly which commit is actually deployed. Without this, "is
+# production running my fix" required manually comparing `git log` against
+# `docker inspect <container> --format .Created`, which is how this
+# session first found the equalizer-persistence fix wasn't live: the image
+# had been built before the fix was committed. Passed via
+# docker-compose.yml's build.args, itself reading a GIT_COMMIT shell env
+# var the deployer sets (e.g. `GIT_COMMIT=$(git rev-parse --short HEAD)
+# docker compose build backend`) — defaults to "unknown" so a build
+# without it still succeeds, just without the traceability.
+ARG GIT_COMMIT=unknown
+ENV GIT_COMMIT=${GIT_COMMIT}
+
 USER node
 EXPOSE 4000
 

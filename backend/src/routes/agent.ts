@@ -25,6 +25,7 @@ import { pushActivity } from "../lib/activity.js"
 import { MUSIC_SERVER_HUB_PATH } from "../agent/signalrHub.js"
 import { isValidTimeZone } from "../lib/geo.js"
 import { ZONE_TRANSPORT_TYPES } from "./commands.js"
+import { ZONE_EFFECT_FIELD } from "../lib/zone-effects.js"
 import type { CommandStatus, ZonePlaybackState } from "@prisma/client"
 
 /** ASP.NET model binding is case-insensitive; the compiled agent's own
@@ -345,6 +346,20 @@ export default async function agentRoutes(app: FastifyInstance) {
       // dropping the EQ change even though the Windows side wrote it fine.
       if (updated.type === "SET_EQ" && command.payload && typeof command.payload === "object") {
         data.equalizer = command.payload
+      }
+      // QA review Option 2: diagnostic only, never throws — warns if this
+      // ack is about to be treated as "fully applied" (Object.keys(data)
+      // below) without actually touching the field ZONE_EFFECT_FIELD says
+      // this command type is expected to persist. This is precisely the
+      // shape the SET_EQ bug had before the block above existed: catches
+      // the *next* command type that repeats it, rather than requiring
+      // someone to notice a field silently never changing in production.
+      const expectedField = ZONE_EFFECT_FIELD[updated.type]
+      if (expectedField && data[expectedField] === undefined) {
+        request.log.warn(
+          { commandId, type: updated.type, expectedField },
+          `SET_EQ-class gap: ${updated.type} ack'd SUCCESS but its zoneState-derived update never touched "${expectedField}" — check whether the agent's zoneState read-back reports it, or whether this needs the same explicit payload merge SET_EQ got.`
+        )
       }
       if (Object.keys(data).length > 0) {
         // Mark this command's sequence as applied so ../routes/commands.ts'

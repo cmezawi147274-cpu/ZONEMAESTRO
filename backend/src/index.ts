@@ -46,7 +46,11 @@ app.setErrorHandler((error, _request, reply) => {
   return reply.status(status).send({ status, code: "INTERNAL_ERROR", message: status < 500 ? message : "Internal server error." })
 })
 
-app.get("/health", async () => ({ ok: true }))
+// QA review Option 6: `commit` is baked in at image build time (see
+// Dockerfile's GIT_COMMIT build arg) — the one place "is production
+// actually running my fix" is answerable by looking, instead of manually
+// diffing `git log` against `docker inspect`'s build timestamp.
+app.get("/health", async () => ({ ok: true, commit: process.env.GIT_COMMIT ?? "unknown" }))
 
 await app.register(
   async (api) => {

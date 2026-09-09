@@ -3,6 +3,7 @@
 import { Volume2, VolumeX } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 
 /**
  * The zone's volume control — extracted from zone-card.tsx unchanged so it
@@ -27,7 +28,7 @@ export function ZoneVolumeRow({
   onValueChange: (value: number) => void
   onValueCommitted: (value: number) => void
 }) {
-  return (
+  const row = (
     <div className="flex items-center gap-2">
       <Button variant="ghost" size="icon-sm" disabled={offline} onClick={onMuteToggle}>
         {muted ? <VolumeX className="size-4" /> : <Volume2 className="size-4" />}
@@ -43,5 +44,19 @@ export function ZoneVolumeRow({
       />
       <span className="w-8 text-right text-xs tabular-nums text-muted-foreground">{volume}%</span>
     </div>
+  )
+
+  if (!offline) return row
+
+  // QA review Option 3: a disabled control with no explanation reads as
+  // "broken" rather than "offline" — exactly backwards during a real
+  // outage. `disabled:pointer-events-none` (button.tsx) means the disabled
+  // Button/Slider themselves never see the hover, so the trigger is this
+  // non-disabled wrapping span instead.
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<span className="block">{row}</span>} />
+      <TooltipContent>Server offline — volume unavailable</TooltipContent>
+    </Tooltip>
   )
 }

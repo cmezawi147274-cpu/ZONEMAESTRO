@@ -33,6 +33,41 @@ function nextPlayableTrack(trackIds: string[], currentTrackId: string | null, ex
   return playable[nextIdx]
 }
 
+/**
+ * QA review Option 2: the Zone field each zone-mutating command type is
+ * expected to persist, per the switch below — kept as data right next to
+ * the switch it describes (not duplicated in routes/agent.ts) specifically
+ * so this can't drift the same way the two independent field lists that
+ * caused the SET_EQ bug did.
+ *
+ * routes/agent.ts' SUCCESS-ack handler imports this to warn (never throw —
+ * this is a diagnostic, not a validator) if an acked command's `zoneState`-
+ * derived update doesn't touch the field it's expected to. That's exactly
+ * the shape of bug SET_EQ had: `zoneState` always carried volume/muted/
+ * playbackState, which made the ack handler consider *any* zone-mutating
+ * ack "fully applied" and skip this file's fallback below — even though
+ * EqualizerAPO's config.txt has no read-back, so `equalizer` never
+ * actually landed anywhere. Add a new zone-mutating CommandType to the
+ * switch below without adding it here, and this map simply can't warn
+ * about it — it's a guard against a *repeat* of the known failure mode,
+ * not a proof no such bug can ever exist again.
+ *
+ * NEXT/PREVIOUS are deliberately left out: `currentTrackId` only changes
+ * when the zone actually has a playlist to advance (see the switch
+ * below), so its absence on a genuine ack is often correct, not a
+ * persistence gap — including it here would make the warning noisy
+ * rather than trustworthy.
+ */
+export const ZONE_EFFECT_FIELD: Partial<Record<CommandType, string>> = {
+  PLAY: "playbackState",
+  PAUSE: "playbackState",
+  STOP: "playbackState",
+  SET_VOLUME: "volume",
+  MUTE: "muted",
+  UNMUTE: "muted",
+  SET_EQ: "equalizer",
+}
+
 /** Optimistically applies a zone transport command's expected effect
  * locally (PLAY -> playbackState PLAYING, SET_VOLUME -> volume, ...).
  * Used as the CMMP-side state update once the agent has ack'd SUCCESS. If

@@ -52,6 +52,13 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      # QA review Option 6: set GIT_COMMIT before building for traceable
+      # deploys, e.g.:
+      #   GIT_COMMIT=$(git rev-parse --short HEAD) docker compose build backend
+      # Surfaced at GET /health. Defaults to "unknown" (Dockerfile ARG
+      # default) if unset, so a plain `docker compose build` still works.
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
     image: cmmp-backend:latest
     profiles: ["full"]
     restart: unless-stopped

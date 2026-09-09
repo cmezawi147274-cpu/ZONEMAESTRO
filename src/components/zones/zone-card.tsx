@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { ZoneStateBadge } from "@/components/common/status-badge"
 import { RoleGate } from "@/components/common/role-gate"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useAuth } from "@/hooks/use-auth"
 import { useZoneControls, useAssignZonePlaylist, useZonePlaylists, useDeleteZone } from "@/hooks/use-zones"
 import { useSetZonePrayerParticipation } from "@/hooks/use-prayer"
@@ -187,26 +188,65 @@ export function ZoneCard({
         </div>
 
         <RoleGate permission="zone:control">
-          <div className="flex items-center justify-center gap-1.5">
-            <Button variant="ghost" size="icon-sm" disabled={offline || controls.isPending} onClick={() => controls.previous()}>
-              <SkipBack className="size-4" />
-            </Button>
-            {zone.playbackState === "PLAYING" ? (
-              <Button size="icon" disabled={offline || controls.isPending} onClick={() => controls.pause()}>
-                <Pause className="size-4" />
+          {/* QA review Option 3: previously just `disabled={offline}` with
+              no explanation — indistinguishable from "broken" during a real
+              outage. The wrapping span (not the buttons themselves) is the
+              tooltip trigger because Button's disabled state sets
+              pointer-events-none (button.tsx), so a disabled button never
+              sees the hover that would open a tooltip anchored to it. Only
+              gated on `offline`, not `controls.isPending` — a fired-in-
+              flight command needs no explanation, it's expected to resolve
+              on its own. */}
+          {offline ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span className="flex items-center justify-center gap-1.5">
+                    <Button variant="ghost" size="icon-sm" disabled onClick={() => controls.previous()}>
+                      <SkipBack className="size-4" />
+                    </Button>
+                    {zone.playbackState === "PLAYING" ? (
+                      <Button size="icon" disabled onClick={() => controls.pause()}>
+                        <Pause className="size-4" />
+                      </Button>
+                    ) : (
+                      <Button size="icon" disabled onClick={() => controls.play()}>
+                        <Play className="size-4" />
+                      </Button>
+                    )}
+                    <Button variant="ghost" size="icon-sm" disabled onClick={() => controls.stop()}>
+                      <Square className="size-4" />
+                    </Button>
+                    <Button variant="ghost" size="icon-sm" disabled onClick={() => controls.next()}>
+                      <SkipForward className="size-4" />
+                    </Button>
+                  </span>
+                }
+              />
+              <TooltipContent>Server offline — transport controls unavailable</TooltipContent>
+            </Tooltip>
+          ) : (
+            <div className="flex items-center justify-center gap-1.5">
+              <Button variant="ghost" size="icon-sm" disabled={controls.isPending} onClick={() => controls.previous()}>
+                <SkipBack className="size-4" />
               </Button>
-            ) : (
-              <Button size="icon" disabled={offline || controls.isPending} onClick={() => controls.play()}>
-                <Play className="size-4" />
+              {zone.playbackState === "PLAYING" ? (
+                <Button size="icon" disabled={controls.isPending} onClick={() => controls.pause()}>
+                  <Pause className="size-4" />
+                </Button>
+              ) : (
+                <Button size="icon" disabled={controls.isPending} onClick={() => controls.play()}>
+                  <Play className="size-4" />
+                </Button>
+              )}
+              <Button variant="ghost" size="icon-sm" disabled={controls.isPending} onClick={() => controls.stop()}>
+                <Square className="size-4" />
               </Button>
-            )}
-            <Button variant="ghost" size="icon-sm" disabled={offline || controls.isPending} onClick={() => controls.stop()}>
-              <Square className="size-4" />
-            </Button>
-            <Button variant="ghost" size="icon-sm" disabled={offline || controls.isPending} onClick={() => controls.next()}>
-              <SkipForward className="size-4" />
-            </Button>
-          </div>
+              <Button variant="ghost" size="icon-sm" disabled={controls.isPending} onClick={() => controls.next()}>
+                <SkipForward className="size-4" />
+              </Button>
+            </div>
+          )}
 
           <ZoneVolumeRow
             volume={localVolume}
@@ -250,9 +290,23 @@ export function ZoneCard({
               // real SET_EQ command to this zone's own Music Server (see
               // zone-equalizer-dialog.tsx), so it needs the exact same live
               // agent volume/mute do.
+              //
+              // QA review Option 3: `title` rather than the app's Tooltip
+              // primitive here specifically — this element is handed to
+              // ZoneEqualizerDialog as `trigger` and Base UI's DialogTrigger
+              // clones its own onClick/ref straight onto it (render={trigger}
+              // in zone-equalizer-dialog.tsx); wrapping it in <Tooltip> would
+              // hand that clone a non-DOM root instead of this <button>,
+              // which risks breaking the click-to-open behavior in a way
+              // this session has no live browser to verify. `disabled:
+              // pointer-events-none` above still means a real Tooltip
+              // wouldn't fire on hover anyway (same reason the transport
+              // controls and ZoneVolumeRow wrap a non-disabled span) — title
+              // is the safe fallback for this one trigger-cloned case.
               <button
                 type="button"
                 disabled={offline}
+                title={offline ? "Server offline — equalizer unavailable" : undefined}
                 className="flex min-h-11 w-full items-center justify-between rounded-md border px-2.5 py-1.5 text-left text-[11px] transition-colors hover:bg-muted/40 disabled:pointer-events-none disabled:opacity-50"
               >
                 <span className="flex items-center gap-1.5 text-muted-foreground">
