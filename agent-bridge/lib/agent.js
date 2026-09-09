@@ -12,12 +12,12 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { execFile } = require("node:child_process");
 
-const { env, getState, saveState, cmmpTrackIdOf } = require("./config");
+const { env, getState, saveState, resetState, clearLibraryState, cmmpTrackIdOf } = require("./config");
 const { log } = require("./log");
 const cmmp = require("./cmmp");
 const local = require("./local-api");
-const shuffle = require("./shuffle");
 const hub = require("./hub");
 
 const status = {
@@ -35,6 +35,119 @@ let timers = [];
 // ---------------------------------------------------------------------------
 // Heartbeat + zone sync
 // ---------------------------------------------------------------------------
+
+/**
+ * Reads C:\ProgramData\MusicServer\auto-boot.json for the heartbeat.
+ * Missing/unreadable/malformed -> treated as {"enabled":true}, matching
+ * the default-ON behavior SETUP establishes and what Set-AutoBoot.ps1 and
+ * the Windows side agree on.
+ */
+function readAutoBootEnabled() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(env.autoBootConfigFile, "utf8"));
+    return typeof parsed.enabled === "boolean" ? parsed.enabled : true;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Runs Set-AutoBoot.ps1, the single owner of auto-boot.json's schema and
+ * of the elevated changes it drives (service start type, scheduled tasks,
+ * startup shortcut) once the SYSTEM "Music Server AutoBoot Apply" task
+ * next reconciles it. This agent runs without admin rights, so "On"/"Off"
+ * here only ever writes the JSON — never a service or task directly.
+ */
+function runAutoBootScript(action) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      "powershell.exe",
+      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", env.autoBootScript, "-Action", action],
+      { windowsHide: true },
+      (err, stdout, stderr) => {
+        if (err) return reject(new Error((stderr && stderr.trim()) || err.message));
+        resolve(stdout);
+      }
+    );
+  });
+}
+
+/**
+ * Starts a SYSTEM scheduled task registered by the (elevated) installer.
+ * This is how the non-admin agent reaches privileged work — the same
+ * pattern Auto boot uses. A missing task fails loudly rather than being
+ * mistaken for success.
+ */
+function runScheduledTask(taskName) {
+  return new Promise((resolve, reject) => {
+    execFile("schtasks.exe", ["/Run", "/TN", taskName], { windowsHide: true }, (err, stdout, stderr) => {
+      if (err) {
+        const detail = (stderr && stderr.trim()) || (stdout && stdout.trim()) || err.message;
+        return reject(
+          new Error(
+            `Could not start the "${taskName}" scheduled task — re-run the elevated installer on this PC so it exists. (${detail})`
+          )
+        );
+      }
+      resolve(stdout);
+    });
+  });
+}
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Waits for the local MusicServer API to report its playback host back up.
+ * `/health` and `playbackHostOnline` are the same surface the bridge's own
+ * control panel reads (ui/server.js), so this asks the machine what really
+ * happened instead of assuming the task succeeded.
+ */
+async function waitForPlaybackHost(timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = "no response yet";
+  // The service needs a moment to drop before it comes back; polling
+  // instantly would see the *old* process still reporting healthy.
+  await wait(2000);
+  while (Date.now() < deadline) {
+    try {
+      const health = await local.getHealth();
+      if (health && health.playbackHostOnline) return true;
+      lastError = "playback host still offline";
+    } catch (err) {
+      lastError = err.message;
+    }
+    await wait(1500);
+  }
+  throw new Error(`Playback did not come back within ${Math.round(timeoutMs / 1000)}s (${lastError}).`);
+}
+
+/**
+ * This PC's own IANA timezone, e.g. "Asia/Dubai". Prayer Mode fires on the
+ * venue's clock, so the cloud needs the venue's zone rather than its own —
+ * see backend/src/lib/prayer-scheduler.ts.
+ */
+function localTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Coordinates, but only when this machine genuinely knows them (set
+ * explicitly in .env by an installer who had a real fix). Nothing is
+ * guessed here: with no coordinates the cloud looks the venue's city up
+ * instead, and 0,0 is never reported as a location.
+ */
+function knownCoordinates() {
+  const latitude = Number(env.venueLatitude);
+  const longitude = Number(env.venueLongitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return {};
+  if (latitude === 0 && longitude === 0) return {};
+  if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return {};
+  return { latitude, longitude };
+}
 
 function cpuPercentSnapshot() {
   const cpus = os.cpus();
@@ -59,6 +172,9 @@ async function heartbeatOnce() {
       cpuPercent: cpuPercentSnapshot(),
       ramPercent,
       cachedTracks: state.cachedTrackIds.length,
+      autoBootEnabled: readAutoBootEnabled(),
+      timezone: localTimeZone(),
+      ...knownCoordinates(),
     });
     status.lastHeartbeatAt = new Date().toISOString();
     status.lastHeartbeatError = null;
@@ -109,11 +225,15 @@ const HANDLERS = {
   STOP: (zoneId) => local.stop(zoneId),
   NEXT: (zoneId) => local.next(zoneId),
   PREVIOUS: (zoneId) => local.previous(zoneId),
-  SET_EQ: (zoneId, payload) => local.setEqualizer(zoneId, payload || {}),
   MUTE: (zoneId) => local.mute(zoneId),
   UNMUTE: (zoneId) => local.unmute(zoneId),
   SET_VOLUME: (zoneId, payload) =>
     local.setVolume(zoneId, payload && typeof payload.volume === "number" ? payload.volume : 50),
+  // See lib/local-api.js `setEqualizer` for the honest caveat: this 404s
+  // against today's compiled builds (no local `eq` action yet), which
+  // executeCommand() below acks FAILED with a real error message rather
+  // than a fake SUCCESS.
+  SET_EQ: (zoneId, payload) => local.setEqualizer(zoneId, payload || {}),
 };
 
 /**
@@ -156,15 +276,75 @@ const SERVER_HANDLERS = {
     await syncTracksOnce();
     await syncZonePlaylistsOnce();
   },
-  SYNC_CONFIG: async () => {
+  SYNC_CONFIG: async (payload) => {
+    // Cloud -> local zone delete (Task 1 — no new CommandType, this rides
+    // on SYNC_CONFIG's existing payload). Best-effort: a zone already gone
+    // locally (or never created here) 404s, which is logged, not thrown —
+    // the cloud row is already deleted regardless of what this machine
+    // does with it.
+    const targets = [];
+    if (payload && typeof payload.deleteLocalZoneId === "string") targets.push(payload.deleteLocalZoneId);
+    if (payload && Array.isArray(payload.deleteLocalZoneIds)) {
+      for (const id of payload.deleteLocalZoneIds) {
+        if (typeof id === "string") targets.push(id);
+      }
+    }
+    for (const localZoneId of targets) {
+      try {
+        await local.deleteZone(localZoneId);
+        log(`SYNC_CONFIG: deleted local zone ${localZoneId}`);
+      } catch (err) {
+        log.warn(`SYNC_CONFIG: could not delete local zone ${localZoneId}:`, err.message);
+      }
+    }
     await syncZonePlaylistsOnce();
     await heartbeatOnce();
   },
+  /**
+   * Restart playback only — never the machine.
+   *
+   * The agent has no admin rights, so the actual work (restart the
+   * MusicServer service, restart MusicServer.PlaybackHost.exe) lives in a
+   * SYSTEM task the elevated installer registers. This triggers it and then
+   * waits for the local API to confirm playback is genuinely back, so a
+   * SUCCESS ack means the venue is playing again rather than "the task was
+   * launched". postgresql-x64-17 and this bridge process are untouched.
+   */
   RESTART_SERVICE: async () => {
-    throw new Error("This agent cannot restart the local MusicServer service — restart it from Windows Services or Start-MusicServer.cmd on the machine.");
+    await runScheduledTask(env.restartPlaybackTask);
+    await waitForPlaybackHost(env.restartPlaybackTimeoutMs);
   },
   REBOOT_SERVER: async () => {
     throw new Error("This agent cannot reboot the machine — reboot it locally.");
+  },
+  SET_AUTO_BOOT: async (payload) => {
+    const enabled = !payload || typeof payload.enabled !== "boolean" || payload.enabled;
+    await runAutoBootScript(enabled ? "On" : "Off");
+  },
+  /**
+   * "Forget Server" — make this PC look like it was never a venue player.
+   *
+   * The Windows-side half is Set-AutoBoot.ps1 `-Action Forget` (the same
+   * script, task names and shortcut Auto Boot already uses — there is no
+   * second auto-start mechanism): stop the MusicServer service, kill
+   * MusicServer.PlaybackHost / MusicServer.Service / MusicServer.Api, set
+   * the service to Manual, disable the three scheduled tasks, remove the
+   * All Users Startup shortcut, then delete auto-boot.json. It never
+   * reboots the PC, never touches postgresql-x64-17, and never uninstalls
+   * Program Files\Music Server.
+   *
+   * Clearing this agent's own pairing is deferred to the returned callback
+   * because CMMP only deletes the cloud row once it has our SUCCESS ack —
+   * and that ack still needs the token this callback throws away.
+   */
+  FORGET_SERVER: async () => {
+    await runAutoBootScript("Forget");
+    return () => {
+      clearLibraryState();
+      resetState();
+      stop();
+      log("FORGET_SERVER: local pairing and cached-track bookkeeping cleared, cloud link stopped.");
+    };
   },
 };
 
@@ -174,9 +354,19 @@ async function executeCommand(cmd) {
   const serverHandler = SERVER_HANDLERS[type];
   if (serverHandler) {
     try {
-      await serverHandler(payload);
+      const afterAck = await serverHandler(payload);
       await ack(commandId, "SUCCESS");
       log(`command ${type} -> SUCCESS`);
+      // A handler may hand back work that can only run once the ack is in —
+      // FORGET_SERVER discards the very token `ack` authenticates with. It
+      // cannot un-ack the command, so a failure here is logged, not re-acked.
+      if (typeof afterAck === "function") {
+        try {
+          await afterAck();
+        } catch (err) {
+          log.warn(`command ${type} post-ack step failed:`, err.message);
+        }
+      }
     } catch (err) {
       log.warn(`command ${type} -> FAILED:`, err.message);
       await ack(commandId, "FAILED", err.message);
@@ -184,13 +374,17 @@ async function executeCommand(cmd) {
     return;
   }
 
-  if (!zoneId) {
-    await ack(commandId, "FAILED", "No zone associated with this command.");
-    return;
-  }
+  // Classify before complaining. A server-level command that this build
+  // doesn't know must not be reported as a *zone* problem — that misdiagnosis
+  // is what made "Forget Server" look like a missing zone rather than a
+  // missing handler.
   const handler = HANDLERS[type];
   if (!handler) {
     await ack(commandId, "FAILED", `Unsupported command type: ${type}`);
+    return;
+  }
+  if (!zoneId) {
+    await ack(commandId, "FAILED", "No zone associated with this command.");
     return;
   }
 
@@ -228,71 +422,134 @@ async function pollCommandsOnce() {
 // the portal shows them with different playlists. Zones CMMP has no
 // playlist for are left untouched — the cloud has nothing to say about
 // them, so their local queue is not the cloud's to clear.
+//
+// Schedules (Task 4) layer on top of this same reconciliation rather than
+// running a second one: when a time slot's window is active for a zone
+// right now, its playlist wins over whatever the cloud has as that zone's
+// "current" playlist. "Now" is this machine's own wall clock — the venue
+// PC genuinely is at the venue, the same assumption the cloud already
+// relies on when a heartbeat's reportedTimezone stands in for the venue's
+// clock (see backend/src/lib/prayer-location.ts).
 // ---------------------------------------------------------------------------
+
+/** MON..SUN, index-matched to Date#getDay() (0 = Sunday), and to exactly
+ * the strings backend DAYS_OF_WEEK / Schedule.days use (src/lib/constants.ts) —
+ * so a schedule's `days` array can be compared to today with no translation. */
+const DAY_ABBREVIATIONS = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+
+function nowHHMM() {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+/**
+ * The winning schedule per localZoneId, right now. A slot competes only
+ * when today is one of its `days` and the current time falls in
+ * [startTime, endTime); among competitors for the same zone (two
+ * overlapping slots), the higher `priority` wins.
+ */
+function activeScheduleWinners(schedules) {
+  const hhmm = nowHHMM();
+  const today = DAY_ABBREVIATIONS[new Date().getDay()];
+  const winners = new Map();
+  for (const s of schedules || []) {
+    if (!s.localZoneId || !s.startTime || !s.endTime) continue;
+    if (!Array.isArray(s.days) || !s.days.includes(today)) continue;
+    if (!(s.startTime <= hhmm && hhmm < s.endTime)) continue;
+    const current = winners.get(s.localZoneId);
+    if (!current || (s.priority ?? 0) > (current.priority ?? 0)) winners.set(s.localZoneId, s);
+  }
+  return winners;
+}
+
+/** Reconciles one zone's local queue to an exact wanted track list. Shared
+ * by both sources that can assign a zone tracks: the cloud's own
+ * current-playlist sync, and a schedule slot that has taken over. */
+async function applyZoneTrackList(localZoneId, trackIds, excludedTrackIds) {
+  const state = getState();
+  const wanted = (trackIds || []).filter((id) => !(excludedTrackIds || []).includes(id));
+  // CMMP track ids the agent has actually cached locally, as local ids.
+  const wantedLocalIds = new Set(wanted.map((cmmpTrackId) => state.trackIdMap[cmmpTrackId]).filter(Boolean));
+
+  let queue;
+  try {
+    queue = (await local.getZonePlaylist(localZoneId)).tracks;
+  } catch (err) {
+    log.warn(`could not read local playlist for zone ${localZoneId}:`, err.message);
+    return;
+  }
+
+  // Drop anything this zone is no longer assigned.
+  for (const entry of queue) {
+    if (wantedLocalIds.has(entry.trackId)) continue;
+    try {
+      await local.unqueueTrack(localZoneId, entry.id);
+      log(`  unqueued stale track ${entry.trackId} from zone ${localZoneId}`);
+    } catch (err) {
+      log.warn(`  failed to unqueue ${entry.trackId} from zone ${localZoneId}:`, err.message);
+    }
+  }
+
+  // Add what it is missing.
+  const already = new Set(queue.map((t) => t.trackId));
+  for (const cmmpTrackId of wanted) {
+    const localTrackId = state.trackIdMap[cmmpTrackId];
+    if (!localTrackId || already.has(localTrackId)) continue;
+    try {
+      await local.queueTrack(localZoneId, localTrackId);
+      log(`  queued track ${cmmpTrackId} -> zone ${localZoneId}`);
+    } catch (err) {
+      log.warn(`  failed to queue track ${cmmpTrackId} on zone ${localZoneId}:`, err.message);
+    }
+  }
+
+  // A zone playing a track it is no longer assigned keeps playing it
+  // until that track ends, so move it onto its new playlist now.
+  try {
+    const zone = await local.getZone(localZoneId);
+    if (zone && zone.currentTrackId && !wantedLocalIds.has(zone.currentTrackId)) {
+      const first = (await local.getZonePlaylist(localZoneId)).tracks[0];
+      if (first && String(zone.status || "").toLowerCase() === "playing") {
+        await local.playTrack(localZoneId, first.trackId);
+        log(`  zone ${localZoneId} moved onto its newly assigned playlist`);
+      } else if (!first) {
+        await local.stop(localZoneId);
+        log(`  zone ${localZoneId} stopped — nothing assigned to it any more`);
+      }
+    }
+  } catch (err) {
+    log.warn(`  could not re-point zone ${localZoneId} after reassignment:`, err.message);
+  }
+}
 
 async function syncZonePlaylistsOnce() {
   const { zonePlaylists } = await cmmp.syncZonePlaylists();
-  const state = getState();
-  for (const zp of zonePlaylists || []) {
-    const localZoneId = zp.localZoneId;
-    if (!localZoneId) continue;
-    if (!zp.playlistId) continue;
 
-    const wanted = (zp.trackIds || []).filter((id) => !(zp.excludedTrackIds || []).includes(id));
-    // CMMP track ids the agent has actually cached locally, as local ids.
-    const wantedLocalIds = new Set(
-      wanted.map((cmmpTrackId) => state.trackIdMap[cmmpTrackId]).filter(Boolean)
-    );
+  let scheduleWinners = new Map();
+  try {
+    const { schedules } = await cmmp.getSchedules();
+    scheduleWinners = activeScheduleWinners(schedules);
+  } catch (err) {
+    log.warn("could not fetch schedules — zones keep their last-known playlist:", err.message);
+  }
 
-    let queue;
-    try {
-      queue = (await local.getZonePlaylist(localZoneId)).tracks;
-    } catch (err) {
-      log.warn(`could not read local playlist for zone ${localZoneId}:`, err.message);
-      continue;
+  const byLocalZoneId = new Map((zonePlaylists || []).filter((zp) => zp.localZoneId).map((zp) => [zp.localZoneId, zp]));
+  // Union, not just the cloud's list: a zone assigned nothing but a
+  // schedule (never manually given a "current" playlist) still needs to
+  // play at its slot's start.
+  const allLocalZoneIds = new Set([...byLocalZoneId.keys(), ...scheduleWinners.keys()]);
+
+  for (const localZoneId of allLocalZoneIds) {
+    const winner = scheduleWinners.get(localZoneId);
+    const base = byLocalZoneId.get(localZoneId);
+    if (winner) {
+      await applyZoneTrackList(localZoneId, winner.trackIds, winner.excludedTrackIds);
+    } else if (base && base.playlistId) {
+      await applyZoneTrackList(localZoneId, base.trackIds, base.excludedTrackIds);
     }
-
-    // Drop anything this zone is no longer assigned.
-    for (const entry of queue) {
-      if (wantedLocalIds.has(entry.trackId)) continue;
-      try {
-        await local.unqueueTrack(localZoneId, entry.id);
-        log(`  unqueued stale track ${entry.trackId} from zone ${localZoneId}`);
-      } catch (err) {
-        log.warn(`  failed to unqueue ${entry.trackId} from zone ${localZoneId}:`, err.message);
-      }
-    }
-
-    // Add what it is missing.
-    const already = new Set(queue.map((t) => t.trackId));
-    for (const cmmpTrackId of wanted) {
-      const localTrackId = state.trackIdMap[cmmpTrackId];
-      if (!localTrackId || already.has(localTrackId)) continue;
-      try {
-        await local.queueTrack(localZoneId, localTrackId);
-        log(`  queued track ${cmmpTrackId} -> zone ${localZoneId}`);
-      } catch (err) {
-        log.warn(`  failed to queue track ${cmmpTrackId} on zone ${localZoneId}:`, err.message);
-      }
-    }
-
-    // A zone playing a track it is no longer assigned keeps playing it
-    // until that track ends, so move it onto its new playlist now.
-    try {
-      const zone = await local.getZone(localZoneId);
-      if (zone && zone.currentTrackId && !wantedLocalIds.has(zone.currentTrackId)) {
-        const first = (await local.getZonePlaylist(localZoneId)).tracks[0];
-        if (first && String(zone.status || "").toLowerCase() === "playing") {
-          await local.playTrack(localZoneId, first.trackId);
-          log(`  zone ${localZoneId} moved onto its newly assigned playlist`);
-        } else if (!first) {
-          await local.stop(localZoneId);
-          log(`  zone ${localZoneId} stopped — nothing assigned to it any more`);
-        }
-      }
-    } catch (err) {
-      log.warn(`  could not re-point zone ${localZoneId} after reassignment:`, err.message);
-    }
+    // Neither a winning schedule nor a cloud-assigned playlist: nothing to
+    // reconcile, same as the original "continue" — this zone's local
+    // queue is not the cloud's to clear.
   }
 }
 
@@ -362,31 +619,9 @@ async function syncTracksOnce() {
     try {
       const res = await fetch(t.url);
       if (!res.ok) throw new Error(`download failed: ${res.status}`);
-
-      // A 200 is not proof of audio. When the cloud's PUBLIC_API_URL still
-      // holds a placeholder host, that hostname answers with somebody
-      // else's page — a parked domain returns an HTML courtesy page with
-      // status 200. Writing that to the music folder produces a silent,
-      // unplayable "track" that is then reported back to the cloud as
-      // successfully cached, so the fault surfaces as "the zone won't play"
-      // rather than as the configuration error it is.
-      const contentType = String(res.headers.get("content-type") || "").toLowerCase();
-      if (contentType && !contentType.startsWith("audio/") && !contentType.startsWith("application/octet-stream")) {
-        throw new Error(
-          `${t.url.split("/media/")[0]} returned "${contentType}" instead of audio — ` +
-            `set PUBLIC_API_URL on the cloud server to its real public address and restart the backend.`
-        );
-      }
-
       const ext = extensionFor(res.headers.get("content-type"), t.url);
       const dest = uniquePath(musicFolder, fileNameFor(t, ext));
       const buf = Buffer.from(await res.arrayBuffer());
-
-      // Second guard, for a server that sends audio headers but no audio:
-      // no real track is a few hundred bytes.
-      if (buf.length < 16 * 1024) {
-        throw new Error(`downloaded only ${buf.length} bytes — that is not a playable audio file, refusing to add it to the library.`);
-      }
 
       // Scan once per track (not batched) so the before/after diff of
       // local track ids unambiguously identifies the local GUID this
@@ -449,72 +684,6 @@ function stop() {
   status.running = false;
 }
 
-/**
- * Real per-zone shuffle.
- *
- * The cloud randomises the order a zone's queue is *built* in, but the
- * compiled MusicServer then auto-advances by index through that fixed
- * order for ever, so every pass sounds the same. There is no local API to
- * reorder its queue and no source to change its advance, so the advance is
- * pre-empted here: just before the playing track ends, the zone is told to
- * play the next track out of its own shuffle bag (lib/shuffle.js) instead.
- *
- * Pre-empting rather than correcting afterwards matters — reacting to the
- * service's advance once it has happened would play a second of the wrong
- * track first, which is exactly what "sounds broken" means to an operator.
- *
- * Zones with fewer than two tracks are left alone: there is nothing to
- * shuffle, and the service's own repeat is already correct.
- */
-const SHUFFLE_LEAD_SECONDS = 2;
-/** zoneId -> the trackId we have already advanced away from, so a slow
- *  service state update cannot make us fire twice for one track. */
-const shuffleAdvanced = new Map();
-
-async function advanceShuffleOnce() {
-  const zones = await local.getZones();
-  shuffle.prune(zones.map((z) => z.zoneId));
-
-  for (const zone of zones) {
-    if (zone.status !== "Playing" || !zone.currentTrackId) {
-      shuffleAdvanced.delete(zone.zoneId);
-      continue;
-    }
-
-    let tracks;
-    try {
-      tracks = (await local.getZonePlaylist(zone.zoneId)).tracks || [];
-    } catch {
-      continue; // transient local API error; the next tick retries
-    }
-    if (tracks.length < 2) continue;
-
-    const current = tracks.find((t) => t.trackId === zone.currentTrackId);
-    const duration = Number(current && current.durationSeconds) || 0;
-    const position = Number(zone.positionSeconds) || 0;
-    if (!current || duration <= 0) continue;
-
-    if (shuffleAdvanced.get(zone.zoneId) === zone.currentTrackId) continue;
-
-    if (position < duration - SHUFFLE_LEAD_SECONDS) {
-      // Mid-track. Record what is playing so a bag refill landing on this
-      // track does not repeat it across the seam between two passes.
-      shuffle.notePlayed(zone.zoneId, zone.currentTrackId);
-      continue;
-    }
-
-    const pick = shuffle.nextTrackId(
-      zone.zoneId,
-      tracks.map((t) => t.trackId)
-    );
-    if (!pick || pick === zone.currentTrackId) continue;
-
-    shuffleAdvanced.set(zone.zoneId, zone.currentTrackId);
-    await local.playTrack(zone.zoneId, pick);
-    log(`shuffle: zone ${zone.zoneId} -> ${pick}`);
-  }
-}
-
 async function start() {
   if (status.running) return;
   const state = getState();
@@ -535,8 +704,6 @@ async function start() {
   // Independent of track sync, so assigning a playlist made of already
   // cached tracks doesn't wait on a new download to be pushed.
   timers.push(setInterval(tick(syncZonePlaylistsOnce, "zone playlist sync"), env.trackSyncMs));
-  // Fast, because it has to fire inside the last seconds of a track.
-  timers.push(setInterval(tick(advanceShuffleOnce, "shuffle advance"), 1000));
 
   log(
     `Running. Heartbeat every ${heartbeatMs / 1000}s, command poll every ${env.commandPollMs / 1000}s, track sync every ${env.trackSyncMs / 1000}s.`
@@ -549,7 +716,6 @@ module.exports = {
   stop,
   heartbeatOnce,
   pollCommandsOnce,
-  advanceShuffleOnce,
   syncTracksOnce,
   syncZonePlaylistsOnce,
   executeCommand,

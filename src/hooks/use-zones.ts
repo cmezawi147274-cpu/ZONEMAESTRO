@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { zonesApi } from "@/lib/api/zones"
 import { useAuth } from "@/hooks/use-auth"
 import { toast } from "sonner"
+import type { ZoneEqualizerSettings } from "@/lib/api/types"
 
 export function useZones(filters?: { serverId?: string; locationId?: string }) {
   return useQuery({
@@ -19,6 +20,16 @@ export function useZone(id: string | undefined) {
     queryFn: () => zonesApi.get(id!),
     enabled: !!id,
     refetchInterval: 5_000,
+  })
+}
+
+/** Playlists actually assigned to this zone — see zonesApi.playlists().
+ * Drives the zone card's own picker (Task 2): never the whole library. */
+export function useZonePlaylists(zoneId: string, options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: ["zones", "detail", zoneId, "playlists"],
+    queryFn: () => zonesApi.playlists(zoneId),
+    enabled: options?.enabled ?? true,
   })
 }
 
@@ -45,6 +56,30 @@ export function useZoneControls(zoneId: string, serverId: string) {
 
   const send = (label: string, action: () => Promise<unknown>) =>
     command.mutateAsync(action).then(() => toast.success(`${label} applied`))
+  /** SET_EQ specifically retries: a command needs the agent's poll cycle
+   * (COMMAND_POLL_MS, ~1.5s) plus real internet round-trip to ack within
+   * AGENT_COMMAND_ACK_TIMEOUT_MS, and a single missed poll window is
+   * enough to time it out — which then leaves the zone's `enabled`/bands
+   * silently un-persisted (the dialog's own local `draft` still shows the
+   * change; only the server's copy is stale, so it reverts the moment the
+   * dialog is reopened or the zone card re-reads `zone.equalizer`). SET_EQ
+   * is idempotent — replaying the same curve is always safe — so retrying
+   * costs nothing a fresh manual retry wouldn't also do. Play/Pause/etc.
+   * are left alone: retrying a transport command after a timeout could
+   * double an action whose effect isn't simply "reapply the same state".
+   */
+  async function sendEqualizerWithRetry(action: () => Promise<unknown>, attempts = 3): Promise<unknown> {
+    let lastError: unknown
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        return await command.mutateAsync(action)
+      } catch (err) {
+        lastError = err
+        if (attempt < attempts) await new Promise((r) => setTimeout(r, attempt * 600))
+      }
+    }
+    throw lastError
+  }
 
   return {
     isPending: command.isPending,
@@ -56,6 +91,12 @@ export function useZoneControls(zoneId: string, serverId: string) {
     setVolume: (volume: number) => send("Volume", () => zonesApi.setVolume(zoneId, serverId, volume, issuedBy)),
     mute: () => send("Mute", () => zonesApi.mute(zoneId, serverId, issuedBy)),
     unmute: () => send("Unmute", () => zonesApi.unmute(zoneId, serverId, issuedBy)),
+    /** Rides the exact same portal -> /commands -> agent -> local-api path
+     * as setVolume — see src/lib/api/zones.ts `setEqualizer` and
+     * agent-bridge/lib/local-api.js. Retries on timeout; see
+     * sendEqualizerWithRetry above. */
+    setEqualizer: (equalizer: ZoneEqualizerSettings) =>
+      sendEqualizerWithRetry(() => zonesApi.setEqualizer(zoneId, serverId, equalizer, issuedBy)),
   }
 }
 
@@ -93,6 +134,20 @@ export function useRestoreTrackForZone() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["zones"] })
       toast.success("Added back to this zone's playlist")
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+}
+
+/** Deletes a zone from the cloud, and — if it has ever synced from a
+ * Windows Music Server — queues its deletion there too. */
+export function useDeleteZone() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (zoneId: string) => zonesApi.remove(zoneId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["zones"] })
+      toast.success("Zone deleted")
     },
     onError: (e: Error) => toast.error(e.message),
   })

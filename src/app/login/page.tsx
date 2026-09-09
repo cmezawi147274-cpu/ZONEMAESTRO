@@ -1,11 +1,11 @@
 "use client"
 
 import { useState } from "react"
-import Link from "next/link"
+import Image from "next/image"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import * as z from "zod"
-import { Eye, EyeOff, Loader2 } from "lucide-react"
+import { Loader2, Mail, Lock, Eye, EyeOff, ArrowRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -17,12 +17,11 @@ import {
   FormMessage,
 } from "@/components/ui/form"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { LoginStage } from "@/app/login/login-stage"
-import { ZoneMaestroWordmark } from "@/app/login/wordmark"
 import { useAuth } from "@/hooks/use-auth"
 import { isMockMode } from "@/lib/config"
 import { DEMO_CREDENTIALS, DEMO_PASSWORD } from "@/lib/mock/seed"
 import { cn } from "@/lib/utils"
+import { LoginHero } from "@/app/login/login-hero"
 
 const schema = z.object({
   email: z.string().min(1, "Email is required").email("Enter a valid email address"),
@@ -51,138 +50,152 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="login-shell dark min-h-[100dvh] bg-[var(--login-bg)] text-foreground">
-      <div className="grid min-h-[100dvh] lg:grid-cols-[minmax(0,1.2fr)_minmax(22.5rem,26.5rem)]">
-        <LoginStage />
+    // Scoped font, not a globals.css change: html{font-family:var(--font-sans)}
+    // resolves to nothing app-wide — `--font-sans` in the @theme inline block
+    // (globals.css) is circularly self-referenced with no real value defined
+    // anywhere, so every page silently falls back to the browser's default
+    // serif. Pre-existing, not introduced by this work — out of scope to fix
+    // globally here (would touch shared theme config). This screen names its
+    // face directly: `--font-logo` (Montserrat, set on <html> by next/font in
+    // layout.tsx) is what the design reference typesets the whole login in.
+    <div
+      className="grid min-h-screen bg-[#111111] text-white lg:grid-cols-[7fr_3fr]"
+      style={{ fontFamily: "var(--font-logo), ui-sans-serif, system-ui, sans-serif" }}
+    >
+      <LoginHero />
 
-        <div className="flex min-h-[100dvh] w-full items-center justify-center bg-[var(--login-panel)] p-6 sm:p-10 lg:border-l lg:border-white/10">
-          <div className="login-form-enter w-full max-w-[22rem] space-y-8">
-            <ZoneMaestroWordmark className="lg:hidden" compact />
+      {/* `dark` scopes shadcn's dark token set to this panel (Alert,
+          FormMessage) — otherwise Alert's destructive variant reads the
+          app's light :root tokens and renders a white box. */}
+      <section className="dark flex min-h-screen items-center justify-center bg-[#111111] px-6 py-12 sm:px-10">
+        <div className="login-form-enter w-full max-w-sm">
+          <div className="mb-10 lg:hidden">
+            <Image
+              src="/branding/login-mark-trimmed.png"
+              alt="ZoneMaestro — Precision Audio Orchestration"
+              width={467}
+              height={425}
+              priority
+              draggable={false}
+              className="h-auto w-[150px] max-w-full select-none"
+              style={{
+                mixBlendMode: "screen",
+                filter: "contrast(1.25) drop-shadow(0 8px 22px rgba(0, 0, 0, 0.5))",
+              }}
+            />
+          </div>
 
-            <div className="space-y-2">
-              <h1 className="text-[1.65rem] leading-tight font-semibold tracking-tight">
-                Sign in
-              </h1>
-              <p className="text-sm leading-relaxed text-foreground/55">
-                Organizations, music, and connected servers.
-              </p>
-            </div>
+          <h2 className="text-[1.9rem] leading-tight font-bold text-white">Sign in</h2>
+          <p className="mt-1.5 text-[14px] text-gray-400">Group operators and venue administrators.</p>
 
-            <Form {...form}>
-              <form
-                onSubmit={form.handleSubmit(onSubmit)}
-                className={cn("space-y-5", loginError && "login-error-shake")}
-              >
-                {loginError && (
-                  <Alert variant="destructive" className="border-red-500/20 bg-red-500/10">
-                    <AlertDescription>
-                      {loginError.message} Check the email and password, then try
-                      again.
-                    </AlertDescription>
-                  </Alert>
-                )}
-                <FormField
-                  control={form.control}
-                  name="email"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel className="text-foreground/80">Email</FormLabel>
-                      <FormControl>
+          <Form {...form}>
+            <form
+              onSubmit={form.handleSubmit(onSubmit)}
+              className={cn("mt-7 space-y-5", loginError && "login-error-shake")}
+            >
+              {loginError && (
+                <Alert variant="destructive" className="border-red-500/30 bg-red-500/10">
+                  <AlertDescription className="text-[13px] text-red-300">{loginError.message}</AlertDescription>
+                </Alert>
+              )}
+
+              <FormField
+                control={form.control}
+                name="email"
+                render={({ field }) => (
+                  <FormItem className="space-y-2">
+                    <FormLabel className="text-[13px] font-medium text-gray-400">Email</FormLabel>
+                    <FormControl>
+                      <div className="relative">
+                        <Mail className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-gray-500" />
                         <Input
-                          placeholder="you@company.com"
+                          placeholder="ops@group.example"
                           autoComplete="email"
                           autoFocus
-                          className="h-11 rounded-xl border-white/10 bg-white/5 px-3 text-base md:text-sm focus-visible:border-[#5ec8f7] focus-visible:ring-[#5ec8f7]/35"
+                          className="h-11 rounded-md border-[#262626] bg-[#181818] pl-10 text-[15px] text-white placeholder:text-gray-600 focus-visible:border-[#34b4f5] focus-visible:ring-[#34b4f5]/30"
                           {...field}
                         />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="password"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel className="text-foreground/80">Password</FormLabel>
+                      </div>
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="password"
+                render={({ field }) => (
+                  <FormItem className="space-y-2">
+                    <FormLabel className="text-[13px] font-medium text-gray-400">Password</FormLabel>
+                    <FormControl>
                       <div className="relative">
-                        <FormControl>
-                          <Input
-                            type={showPassword ? "text" : "password"}
-                            autoComplete="current-password"
-                            className="h-11 rounded-xl border-white/10 bg-white/5 px-3 pr-11 text-base md:text-sm focus-visible:border-[#5ec8f7] focus-visible:ring-[#5ec8f7]/35"
-                            {...field}
-                          />
-                        </FormControl>
+                        <Lock className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-gray-500" />
+                        <Input
+                          type={showPassword ? "text" : "password"}
+                          autoComplete="current-password"
+                          placeholder="••••••••••"
+                          className="h-11 rounded-md border-[#262626] bg-[#181818] pr-11 pl-10 text-[15px] text-white placeholder:text-gray-600 focus-visible:border-[#34b4f5] focus-visible:ring-[#34b4f5]/30"
+                          {...field}
+                        />
                         <button
                           type="button"
+                          onClick={() => setShowPassword((v) => !v)}
                           aria-label={showPassword ? "Hide password" : "Show password"}
                           aria-pressed={showPassword}
-                          onClick={() => setShowPassword((open) => !open)}
-                          className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-foreground/50 transition-[color,transform] duration-150 [transition-timing-function:var(--ease-out)] hover:text-foreground active:scale-[0.97]"
+                          tabIndex={-1}
+                          className="absolute top-1/2 right-2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded text-gray-500 transition-colors hover:text-gray-300"
                         >
-                          {showPassword ? (
-                            <EyeOff className="size-4" aria-hidden="true" />
-                          ) : (
-                            <Eye className="size-4" aria-hidden="true" />
-                          )}
+                          {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                         </button>
                       </div>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <Button
-                  type="submit"
-                  disabled={isLoggingIn}
-                  className="login-submit h-11 w-full rounded-xl border-transparent active:translate-y-0 active:scale-[0.97] hover:bg-[#7dd3fc]"
-                >
-                  {isLoggingIn && <Loader2 className="size-4 animate-spin" />}
-                  Sign in
-                </Button>
-              </form>
-            </Form>
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
-            {isMockMode && (
-              <div className="space-y-2">
-                <p className="text-xs text-foreground/45">
-                  Demo accounts. Password{" "}
-                  <code className="font-mono text-foreground/70">{DEMO_PASSWORD}</code>
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {DEMO_CREDENTIALS.map((cred) => (
-                    <button
-                      key={cred.email}
-                      type="button"
-                      onClick={() => setPrefill(cred.email)}
-                      className="rounded-xl border border-white/10 px-2.5 py-1.5 text-xs font-medium text-foreground/70 transition-[background-color,color] duration-150 [transition-timing-function:var(--ease-out)] hover:bg-white/10 hover:text-foreground"
-                    >
-                      {cred.role.replaceAll("_", " ").toLowerCase()}
-                    </button>
-                  ))}
-                </div>
+              <Button
+                type="submit"
+                disabled={isLoggingIn}
+                className="login-submit flex h-11 w-full items-center justify-center gap-2 rounded-md bg-[#34b4f5] text-[15px] font-semibold text-black hover:bg-[#1fa3e6]"
+              >
+                {isLoggingIn ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Signing in…
+                  </>
+                ) : (
+                  <>
+                    Sign in
+                    <ArrowRight className="h-4 w-4" />
+                  </>
+                )}
+              </Button>
+            </form>
+          </Form>
+
+          {isMockMode && (
+            <div className="mt-6 space-y-2 rounded-md border border-[#262626] bg-[#181818] p-4">
+              <p className="text-xs font-medium text-gray-500">
+                Mock mode demo accounts. Password: <code className="font-mono text-gray-300">{DEMO_PASSWORD}</code>
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {DEMO_CREDENTIALS.map((cred) => (
+                  <button
+                    key={cred.email}
+                    type="button"
+                    onClick={() => setPrefill(cred.email)}
+                    className="inline-flex min-h-9 items-center rounded-md border border-[#262626] bg-[#111111] px-2.5 text-xs font-medium text-gray-300 transition-colors hover:border-gray-600 hover:bg-[#181818] hover:text-white"
+                  >
+                    {cred.role.replace("_", " ")}
+                  </button>
+                ))}
               </div>
-            )}
-
-            <div className="space-y-3">
-              <p className="text-[11px] leading-relaxed text-foreground/40">
-                Encrypted session. MusicServers pair outbound only.
-              </p>
-              <p className="text-xs leading-relaxed text-foreground/50">
-                Windows MusicServer administrator?{" "}
-                <Link
-                  href="/servers"
-                  className="font-medium text-foreground/80 underline decoration-foreground/25 underline-offset-4 transition-[color] duration-150 [transition-timing-function:var(--ease-out)] hover:text-foreground"
-                >
-                  Manage server pairing
-                </Link>{" "}
-                after signing in.
-              </p>
             </div>
-          </div>
+          )}
         </div>
-      </div>
+      </section>
     </div>
   )
 }

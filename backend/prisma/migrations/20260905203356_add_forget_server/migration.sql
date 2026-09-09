@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "CommandType" ADD VALUE 'FORGET_SERVER';

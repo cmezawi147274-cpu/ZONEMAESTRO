@@ -93,6 +93,12 @@ export function toMusicServer(s: DbMusicServer, zoneCount: number, pendingSyncJo
     cachedSizeGb: s.cachedSizeGb,
     pendingSyncJobs,
     createdAt: s.createdAt.toISOString(),
+    autoBootEnabled: s.autoBootEnabled,
+    // Venue clock as last reported by this machine's own heartbeat, and
+    // when that last happened — drives the venue-location pill on the
+    // server detail page. Null on an agent too old to send it.
+    reportedTimezone: s.reportedTimezone,
+    reportedLocationAt: s.reportedLocationAt ? s.reportedLocationAt.toISOString() : null,
   }
 }
 
@@ -123,6 +129,10 @@ export function toZone(z: DbZone) {
     lastAppliedSequence: z.lastAppliedSequence,
     lastOverrideAt: z.lastOverrideAt ? z.lastOverrideAt.toISOString() : null,
     excludedTrackIds: z.excludedTrackIds,
+    // Opaque to the backend — validated on write (POST /zones/:id/equalizer),
+    // shaped by src/lib/api/types.ts ZoneEqualizerSettings. Null until a
+    // zone has ever had its equalizer touched.
+    equalizer: (z.equalizer ?? null) as Record<string, unknown> | null,
   }
 }
 

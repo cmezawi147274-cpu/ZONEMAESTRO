@@ -107,6 +107,16 @@ export interface MusicServer {
   cachedSizeGb: number
   pendingSyncJobs: number
   createdAt: string
+  /** Whether the Windows MusicServer should auto-start on boot. Defaults to
+   * true after SETUP; toggled via the SET_AUTO_BOOT command. */
+  autoBootEnabled: boolean
+  /** The venue PC's own IANA timezone, as its last heartbeat reported it.
+   * Null on an agent too old to send one — the Location's timezone is then
+   * used for prayer calculation instead. */
+  reportedTimezone: string | null
+  /** When a usable timezone last arrived on a heartbeat. Null means this
+   * venue has never reported its clock. */
+  reportedLocationAt: string | null
 }
 
 /** Snapshot of a zone's playback captured right before an automatic
@@ -156,6 +166,37 @@ export interface Zone {
    * different playlist is assigned. See src/lib/api/zones.ts
    * `effectiveTrackIds` / `removeTrackFromZone`. */
   excludedTrackIds: string[]
+  /** Per-zone equalizer. Null means never configured — the UI treats that
+   * the same as src/lib/equalizer/presets.ts `defaultEqualizer()` (flat,
+   * off). Set the same way `volume` is — a SET_EQ RemoteCommand to this
+   * zone's own Music Server (src/lib/api/zones.ts `setEqualizer`), never
+   * written directly by a route. */
+  equalizer: ZoneEqualizerSettings | null
+}
+
+/** One of the three fixed-purpose EQ modules (Bass Boost, Loudness,
+ * Virtualizer) — a toggle plus a 0-100 amount, independent of which preset
+ * or custom band curve is active. */
+export interface ZoneEqualizerModule {
+  on: boolean
+  /** 0-100. */
+  amount: number
+}
+
+/** Per-zone equalizer settings — see Zone.equalizer. `bands` always has
+ * exactly 10 gains (-12..12 dB), in the order of
+ * src/lib/equalizer/presets.ts `EQ_BANDS`. `presetId` is one of that
+ * file's EQ_PRESETS ids, or "custom" once a band has been hand-edited off
+ * whatever preset was active. `enabled` is the master bypass: false means
+ * the bands (and modules) are stored but applied as flat on that zone's
+ * Music Server output — see agent-bridge/lib/local-api.js `setEqualizer`. */
+export interface ZoneEqualizerSettings {
+  enabled: boolean
+  presetId: string
+  bands: number[]
+  bassBoost: ZoneEqualizerModule
+  loudness: ZoneEqualizerModule
+  virtualizer: ZoneEqualizerModule
 }
 
 export interface Track {
@@ -364,10 +405,55 @@ export interface PrayerConfig {
  * timezone, for display only (already offset-adjusted). */
 export type PrayerTimesToday = Record<PrayerName, string>
 
+/** GET /prayer/times/today — prayer times computed in the cloud against
+ * the venue's own coordinates and clock (backend/src/routes/prayer.ts).
+ * `location.source` says where the coordinates came from: a GPS fix the
+ * Windows agent reported, a lookup of the venue's city, or the manually
+ * picked location saved on the config. */
+export interface PrayerTimesTodayResponse {
+  /** Venue-local calendar date the times are for, "YYYY-MM-DD". */
+  date: string
+  /** IANA zone the times are expressed in — the venue's, never the cloud's. */
+  timezone: string
+  calculationMethodId: number
+  times: PrayerTimesToday
+  location: {
+    city: string | null
+    country: string | null
+    latitude: number
+    longitude: number
+    source: "agent-gps" | "location-city" | "config"
+  }
+  /** Drives the venue-location pill. `state` is VENUE only when the venue
+   * PC's own heartbeat supplied the clock these times were computed on —
+   * coordinates coming from a city lookup does not downgrade it. */
+  venue: {
+    state: "VENUE" | "PORTAL"
+    timezone: string
+    city: string | null
+    country: string | null
+    timezoneSource: "heartbeat" | "location" | "config"
+    coordinatesSource: "agent-gps" | "location-city" | "config"
+    /** Name of the Music Server whose heartbeat supplied the clock. */
+    serverName: string | null
+  }
+}
+
 export interface PrayerScheduleEvent {
   prayer: PrayerName
   /** ISO instant (UTC) the pause begins, offset already applied. */
   startAt: string
   /** ISO instant (UTC) the pause ends (startAt + pauseDurationMinutes). */
   endAt: string
+}
+
+/** An operator-saved EQ curve, shared across the organization — the
+ * user-defined counterpart to the built-in curves in
+ * src/lib/equalizer/presets.ts. Only the 10 band gains are stored; the
+ * bassBoost/loudness/virtualizer trims stay per-zone. */
+export interface SavedEqPreset {
+  id: string
+  name: string
+  bands: number[]
+  createdAt: string
 }

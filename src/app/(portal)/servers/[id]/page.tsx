@@ -2,11 +2,11 @@
 
 import { use } from "react"
 import Link from "next/link"
-import { ArrowLeft, Cpu, MemoryStick, HardDrive, ServerCog, Trash2 } from "lucide-react"
+import { ArrowLeft, Cpu, MemoryStick, HardDrive, ServerCog, Trash2, PowerOff, Loader2 } from "lucide-react"
 import { PageHeader } from "@/components/common/page-header"
 import { EmptyState } from "@/components/common/empty-state"
 import { RoleGate } from "@/components/common/role-gate"
-import { ServerStatusBadge } from "@/components/common/status-badge"
+import { ServerStatusBadge, VenueLocationBadge, type VenueLocationState } from "@/components/common/status-badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -27,7 +27,7 @@ import { LogViewer } from "@/components/servers/log-viewer"
 import { CommandHistory } from "@/components/servers/command-history"
 import { ServerSyncTable } from "@/components/servers/server-sync-table"
 import { ZoneCard } from "@/components/zones/zone-card"
-import { useServer, useServerLogs, useDeleteServer } from "@/hooks/use-servers"
+import { useServer, useServerLogs, useDeleteServer, useForgetServer } from "@/hooks/use-servers"
 import { useZones } from "@/hooks/use-zones"
 import { useLocation } from "@/hooks/use-locations"
 import { useCommands } from "@/hooks/use-commands"
@@ -49,6 +49,7 @@ export default function ServerDetailPage(props: PageProps<"/servers/[id]">) {
   const { data: schedules } = useSchedules({ serverId: id })
   const { data: playlists } = usePlaylists()
   const deleteServer = useDeleteServer()
+  const forgetServer = useForgetServer()
 
   if (isLoading) {
     return (
@@ -60,6 +61,20 @@ export default function ServerDetailPage(props: PageProps<"/servers/[id]">) {
   }
 
   if (!server) return <EmptyState icon={ServerCog} title="Server not found" />
+
+  // Green only while this machine is both reachable and actually reporting a
+  // timezone; an OFFLINE server's last-known clock is stale by definition, so
+  // prayer scheduling would fall back to the portal Location.
+  const reportsVenueClock = Boolean(server.reportedTimezone && server.reportedLocationAt)
+  const venueLocationState: VenueLocationState =
+    server.status === "OFFLINE" || server.status === "UNKNOWN"
+      ? "NONE"
+      : reportsVenueClock
+        ? "VENUE"
+        : "PORTAL"
+  const venueLocationDetail = reportsVenueClock
+    ? `Reports timezone ${server.reportedTimezone} · last received ${formatRelativeTime(server.reportedLocationAt)}`
+    : "This Music Server has not reported its timezone — prayer times use the venue's portal Location instead."
 
   return (
     <div className="space-y-6">
@@ -105,6 +120,47 @@ export default function ServerDetailPage(props: PageProps<"/servers/[id]">) {
                         }}
                       >
                         Remove Server
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              </RoleGate>
+              <RoleGate permission="server:forget">
+                <AlertDialog>
+                  <AlertDialogTrigger render={
+                    <Button variant="destructive" size="sm" disabled={forgetServer.isPending}>
+                      {forgetServer.isPending ? <Loader2 className="size-4 animate-spin" /> : <PowerOff className="size-4" />}
+                      Forget Server
+                    </Button>
+                  } />
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Forget {server.name}?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        This shuts down the venue player on the Windows machine, clears its local pairing
+                        and cached music bookkeeping, and removes {server.name} from the portal as if it
+                        was never synced. Music stops playing at this venue. The machine is not rebooted
+                        and Music Server stays installed, but it will no longer start on its own. This
+                        cannot be undone — re-pairing from scratch is the only way back.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction
+                        onClick={async () => {
+                          // Only navigate once the cloud row is actually gone —
+                          // a timeout leaves the server in place (see
+                          // backend/src/routes/servers.ts), so stay on this
+                          // page and let the failure toast explain why.
+                          try {
+                            const result = await forgetServer.mutateAsync(server.id)
+                            if (result.deleted) router.push("/servers")
+                          } catch {
+                            /* useForgetServer's onError already toasted */
+                          }
+                        }}
+                      >
+                        Forget Server
                       </AlertDialogAction>
                     </AlertDialogFooter>
                   </AlertDialogContent>
@@ -177,6 +233,13 @@ export default function ServerDetailPage(props: PageProps<"/servers/[id]">) {
           <div>
             <p className="text-muted-foreground">Last Heartbeat</p>
             <p className="font-medium">{formatRelativeTime(server.lastHeartbeatAt)}</p>
+            {/* Whether this machine is telling the cloud its own clock —
+                what Prayer Mode schedules against. */}
+            <VenueLocationBadge
+              state={venueLocationState}
+              detail={venueLocationDetail}
+              className="mt-1.5 text-[11px]"
+            />
           </div>
           <div>
             <p className="text-muted-foreground">Paired</p>

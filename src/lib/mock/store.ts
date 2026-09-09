@@ -38,6 +38,11 @@ class MockStore {
   alerts: Alert[] = seed.alerts.map((a) => ({ ...a }))
   activity: ActivityEvent[] = seed.activity.map((a) => ({ ...a }))
   users: User[] = seed.users.map((u) => ({ ...u }))
+  /** Passwords a Super Admin set when creating an account, keyed by
+   * lowercased email. Mock-only and in memory like everything else here, so
+   * a user created during a demo can actually sign in. Seeded users are not
+   * listed and keep signing in with DEMO_PASSWORD — see src/lib/api/auth.ts. */
+  userPasswords: Record<string, string> = {}
 
   recomputeCounts() {
     this.locations.forEach((loc) => {

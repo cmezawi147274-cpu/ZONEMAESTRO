@@ -22,7 +22,6 @@
  */
 
 const { env } = require("./config");
-const eqApo = require("./eq-apo");
 
 async function request(pathname, { method = "GET", body } = {}) {
   const res = await fetch(`${env.localApiUrl}${pathname}`, {
@@ -100,30 +99,23 @@ const stop = (zoneId) => action(zoneId, "stop");
 const mute = (zoneId) => action(zoneId, "mute");
 const unmute = (zoneId) => action(zoneId, "unmute");
 const setVolume = (zoneId, volume) => action(zoneId, "volume", { volume });
-const playTrack = (zoneId, trackId) => action(zoneId, "play", { trackId });
 /**
- * Applies a 10-band equalizer curve to this zone's own output.
+ * Applies a 10-band equalizer curve to this zone's own output — the same
+ * shape CMMP sends (see src/lib/api/types.ts ZoneEqualizerSettings):
+ * { enabled, bands[10], bassBoost, loudness, virtualizer }.
  *
- * The compiled MusicServer has no audio-processing surface: `POST
- * /zones/:id/eq` answers 404, as do equalizer/dsp/effects. So the curve is
- * applied one layer down, at the Windows output device this zone is bound
- * to, via Equalizer APO (see lib/eq-apo.js). The local `eq` action is still
- * tried first so the very next MusicServer build that adds one takes over
- * automatically, with no change here.
+ * As of this writing the compiled local service's action set is the fixed
+ * list documented at the top of this file, and "eq" is not in it — this
+ * will 404 with `Unknown action: eq` against today's builds, the same way
+ * every other unsupported call here throws a real Error that
+ * lib/agent.js's executeCommand() catches and acks FAILED with (see
+ * REBOOT_SERVER for the same honesty pattern: this agent doesn't pretend
+ * to do what the machine it's on cannot). Left wired for real rather than
+ * stubbed out so the very next MusicServer build that adds a local `eq`
+ * zone action starts working with zero changes on the cloud side.
  */
-async function setEqualizer(zoneId, settings) {
-  try {
-    return await action(zoneId, "eq", settings);
-  } catch (err) {
-    if (err.status !== 404) throw err;
-  }
-  const zones = await getZones();
-  const zone = zones.find((z) => z.zoneId === zoneId);
-  const applied = await eqApo.applyZoneEqualizer(zone, settings);
-  const pruned = await eqApo.pruneStaleZones(zones.map((z) => z.zoneId));
-  return { applied: "equalizer-apo", ...applied, ...(pruned.length ? { pruned } : {}) };
-}
-
+const setEqualizer = (zoneId, settings) => action(zoneId, "eq", settings);
+const playTrack = (zoneId, trackId) => action(zoneId, "play", { trackId });
 const queueTrack = (zoneId, trackId) => request(zonePath(zoneId, "/playlist/tracks"), { method: "POST", body: { trackId, zoneName: zoneId } });
 
 /** Removes one entry from a zone's own queue. Keyed by the queue entry's

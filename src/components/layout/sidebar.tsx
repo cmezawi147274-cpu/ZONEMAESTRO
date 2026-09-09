@@ -1,11 +1,12 @@
 "use client"
 
 import Link from "next/link"
+import Image from "next/image"
 import { usePathname } from "next/navigation"
-import { Music4 } from "lucide-react"
 import { NAV_GROUPS } from "@/components/layout/nav-items"
 import { useAuth } from "@/hooks/use-auth"
 import { cn } from "@/lib/utils"
+import { LogoWordmark } from "@/components/common/logo"
 
 export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname()
@@ -20,13 +21,19 @@ export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-14 items-center gap-2 border-b px-4">
-        <div className="flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground">
-          <Music4 className="size-4" />
-        </div>
+      <div className="flex h-14 items-center gap-2.5 border-b px-4">
+        {/* The real artwork's mark, cropped to just the icon (no baked-in
+            wordmark) — see public/branding/zonemaestro-icon.jpg. */}
+        <Image
+          src="/branding/zonemaestro-icon.jpg"
+          alt=""
+          width={460}
+          height={258}
+          className="h-8 w-auto shrink-0 rounded-md"
+        />
         <div className="leading-tight">
-          <p className="text-sm font-semibold">CMMP</p>
-          <p className="text-[11px] text-muted-foreground">Cloud Music Portal</p>
+          <LogoWordmark className="text-sm" />
+          <p className="text-[11px] text-muted-foreground">Precision Audio Orchestration</p>
         </div>
       </div>
 

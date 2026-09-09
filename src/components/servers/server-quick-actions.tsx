@@ -2,6 +2,7 @@
 
 import { RefreshCw, Settings2, Power } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Switch } from "@/components/ui/switch"
 import { RoleGate } from "@/components/common/role-gate"
 import { useSendCommand } from "@/hooks/use-commands"
 import { useSyncConfig } from "@/hooks/use-sync"
@@ -34,6 +35,16 @@ export function ServerQuickActions({ server }: { server: MusicServer }) {
         >
           <Power className="size-4" /> Restart Playback Service
         </Button>
+        <label className="flex items-center gap-2 text-sm font-medium">
+          <Switch
+            checked={server.autoBootEnabled}
+            disabled={disabled}
+            onCheckedChange={(enabled) =>
+              sendCommand.mutate({ serverId: server.id, type: "SET_AUTO_BOOT", payload: { enabled } })
+            }
+          />
+          Auto boot
+        </label>
       </div>
     </RoleGate>
   )

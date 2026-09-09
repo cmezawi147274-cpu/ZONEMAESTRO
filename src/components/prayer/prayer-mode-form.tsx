@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { CountryCityPicker } from "@/components/common/country-city-picker"
+import { VenueLocationBadge, type VenueLocationState } from "@/components/common/status-badge"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { cn } from "@/lib/utils"
 import {
@@ -38,6 +39,19 @@ export function PrayerModeForm() {
   }, [savedConfig])
 
   const { data: todayTimes, isFetching: timesLoading } = useTodayPrayerTimes(config.location, config.calculationMethodId)
+
+  // Nothing came back at all — no usable location, or the times service was
+  // unreachable — so the cloud is not calculating from anywhere right now.
+  const venueState: VenueLocationState = !todayTimes ? "NONE" : todayTimes.venue.state
+  const venueDetail = !todayTimes
+    ? "No venue timezone from the local Music Server, and no usable portal location."
+    : todayTimes.venue.timezoneSource === "heartbeat"
+      ? `Timezone ${todayTimes.venue.timezone} reported by ${todayTimes.venue.serverName ?? "the local Music Server"}` +
+        `${todayTimes.venue.city ? ` · ${todayTimes.venue.city}, ${todayTimes.venue.country}` : ""}`
+      : `Timezone ${todayTimes.venue.timezone} from the ` +
+        `${todayTimes.venue.timezoneSource === "location" ? "portal Location" : "custom location"}` +
+        `${todayTimes.venue.city ? ` · ${todayTimes.venue.city}, ${todayTimes.venue.country}` : ""}` +
+        " — the local Music Server has not reported its clock."
 
   function selectExistingLocation(locationId: string) {
     const loc = locationsWithGeo.find((l) => l.id === locationId)
@@ -176,10 +190,14 @@ export function PrayerModeForm() {
       {config.location && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-sm font-medium">Today's Prayer Times</CardTitle>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <CardTitle className="text-sm font-medium">Today's Prayer Times</CardTitle>
+              <VenueLocationBadge state={venueState} detail={venueDetail} />
+            </div>
             <CardDescription>
               Verify the configuration — all times shown in {formatTimezoneLabel(config.location)}.
             </CardDescription>
+            <CardDescription className="text-xs">{venueDetail}</CardDescription>
           </CardHeader>
           <CardContent>
             {timesLoading ? (
@@ -195,7 +213,7 @@ export function PrayerModeForm() {
                 {PRAYER_NAMES.map((p) => (
                   <div key={p} className="rounded-lg border p-3 text-center">
                     <p className="text-xs text-muted-foreground">{PRAYER_LABELS[p]}</p>
-                    <p className="text-lg font-semibold tabular-nums">{todayTimes[p]}</p>
+                    <p className="text-lg font-semibold tabular-nums">{todayTimes.times[p]}</p>
                   </div>
                 ))}
               </div>

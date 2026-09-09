@@ -54,7 +54,57 @@ const env = {
   // be reachable from the restaurant's LAN unless explicitly opted into.
   uiHost: process.env.LOCAL_UI_HOST || "127.0.0.1",
   agentVersion: "0.2.0-bridge",
+  // Auto Boot: state file and management script installed by SETUP onto
+  // this machine (see venue kit Set-AutoBoot.ps1). The agent never writes
+  // the JSON itself — it always shells out to the script, which is the one
+  // place that owns the file's schema and ACLs.
+  autoBootConfigFile: process.env.AUTO_BOOT_CONFIG_FILE || "C:\\ProgramData\\MusicServer\\auto-boot.json",
+  autoBootScript: process.env.AUTO_BOOT_SCRIPT || "C:\\ProgramData\\MusicServer\\Set-AutoBoot.ps1",
+  // Optional real coordinates for this venue, if whoever installed this
+  // machine had them. Left unset by default and never guessed: the cloud
+  // falls back to looking up the venue's city (backend/src/lib/geo.ts).
+  venueLatitude: process.env.VENUE_LATITUDE || "",
+  venueLongitude: process.env.VENUE_LONGITUDE || "",
+  // SYSTEM task the elevated installer registers to restart playback (the
+  // MusicServer service + MusicServer.PlaybackHost.exe). The agent is not
+  // admin and can only trigger it, never do the work itself.
+  restartPlaybackTask: process.env.RESTART_PLAYBACK_TASK || "Music Server Restart Playback",
+  // How long to wait for :8765 to report playbackHostOnline again. Kept
+  // under the cloud's own ack budget so the portal sees a real result.
+  restartPlaybackTimeoutMs: Number(process.env.RESTART_PLAYBACK_TIMEOUT_MS || 25000),
 };
+
+/**
+ * agent.js and cmmp.js must always ship together with the env keys they
+ * read. The bug this guards against: a newer agent.js run against an
+ * older config.js reads `undefined` for a key it expects — e.g.
+ * Set-AutoBoot.ps1 invoked with `-File undefined`, which PowerShell
+ * rejects, and readAutoBootEnabled() silently swallows into "true". That
+ * fails a portal feature with no error anywhere near the actual cause.
+ * This turns it into a loud startup error naming the exact missing key,
+ * at the moment config.js loads, before anything runs on it.
+ */
+const REQUIRED_ENV_KEYS = [
+  "cmmpApiUrl",
+  "localApiUrl",
+  "stateFile",
+  "commandPollMs",
+  "trackSyncMs",
+  "defaultHeartbeatSec",
+  "agentVersion",
+  "autoBootConfigFile",
+  "autoBootScript",
+  "restartPlaybackTask",
+  "restartPlaybackTimeoutMs",
+];
+for (const key of REQUIRED_ENV_KEYS) {
+  if (env[key] === undefined) {
+    throw new Error(
+      `agent-bridge config.js is missing required key "${key}", which agent.js/cmmp.js depend on. ` +
+        `agent.js and config.js must always be updated together — see lib/config.js.`
+    );
+  }
+}
 
 const emptyState = () => ({
   agentToken: null,

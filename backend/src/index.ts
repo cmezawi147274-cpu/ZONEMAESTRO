@@ -11,6 +11,7 @@ import organizationsRoutes from "./routes/organizations.js"
 import locationsRoutes from "./routes/locations.js"
 import serversRoutes from "./routes/servers.js"
 import zonesRoutes from "./routes/zones.js"
+import equalizerPresetsRoutes from "./routes/equalizer-presets.js"
 import commandsRoutes from "./routes/commands.js"
 import musicRoutes from "./routes/music.js"
 import playlistsRoutes from "./routes/playlists.js"
@@ -22,7 +23,8 @@ import monitoringRoutes from "./routes/monitoring.js"
 import prayerRoutes from "./routes/prayer.js"
 import agentRoutes from "./routes/agent.js"
 import { attachMusicServerHub } from "./agent/signalrHub.js"
-import { startAgentHeartbeatSweep } from "./lib/agent-sweep.js"
+import { startAgentHeartbeatSweep, startUnpairedRetentionSweep } from "./lib/agent-sweep.js"
+import { startPrayerScheduler } from "./lib/prayer-scheduler.js"
 
 const app = Fastify({ logger: true })
 
@@ -53,6 +55,7 @@ await app.register(
     await api.register(locationsRoutes)
     await api.register(serversRoutes)
     await api.register(zonesRoutes)
+    await api.register(equalizerPresetsRoutes)
     await api.register(commandsRoutes)
     await api.register(musicRoutes)
     await api.register(playlistsRoutes)
@@ -78,10 +81,12 @@ await app.listen({ port: env.port, host: "0.0.0.0" })
 initRealtime(app.server)
 attachMusicServerHub(app.server)
 startAgentHeartbeatSweep()
+startUnpairedRetentionSweep()
+// Prayer Mode executes here, not in a browser tab: pauses must keep
+// happening with the portal closed. See lib/prayer-scheduler.ts.
+startPrayerScheduler()
 app.log.info(`CMMP backend listening on 0.0.0.0:${env.port}, realtime namespace /realtime, agent API at ${env.agentApiPrefix}`)
 
-// Loud, unmissable, every boot. This setting failing is silent everywhere
-// else in the system — see publicApiUrlProblem().
 const publicUrlIssue = publicApiUrlProblem()
 if (publicUrlIssue) {
   app.log.error("=".repeat(72))

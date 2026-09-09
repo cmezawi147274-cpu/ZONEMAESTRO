@@ -1,0 +1,159 @@
+"use client"
+
+import { useMemo, useState } from "react"
+import { Share2, Loader2 } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { useOrganizations } from "@/hooks/use-organizations"
+import { useLocations } from "@/hooks/use-locations"
+import { useServers } from "@/hooks/use-servers"
+import { useZones } from "@/hooks/use-zones"
+import { useAssignPlaylist } from "@/hooks/use-playlists"
+import type { PlaylistAssignment } from "@/lib/api/types"
+
+const TARGET_TYPES: { value: PlaylistAssignment["targetType"]; label: string }[] = [
+  { value: "ORGANIZATION", label: "Organization" },
+  { value: "LOCATION", label: "Location" },
+  { value: "SERVER", label: "Music Server" },
+  { value: "ZONE", label: "Zone" },
+]
+
+export function AssignPlaylistDialog({ playlistId }: { playlistId: string }) {
+  const [open, setOpen] = useState(false)
+  const [targetType, setTargetType] = useState<PlaylistAssignment["targetType"]>("ZONE")
+  const [targetId, setTargetId] = useState("")
+  const { data: organizations } = useOrganizations()
+  const { data: locations } = useLocations()
+  const { data: servers } = useServers()
+  const { data: zones } = useZones()
+  const assign = useAssignPlaylist()
+
+  const isZoneTarget = targetType === "ZONE"
+
+  const options =
+    targetType === "ORGANIZATION"
+      ? organizations?.map((o) => ({ id: o.id, label: o.name }))
+      : targetType === "LOCATION"
+        ? locations?.map((l) => ({ id: l.id, label: l.name }))
+        : targetType === "SERVER"
+          ? servers?.map((s) => ({ id: s.id, label: s.name }))
+          : zones?.map((z) => ({ id: z.id, label: z.name }))
+
+  /** Zones bucketed under the Music Server that owns them. Servers with no
+   * zones are dropped; zones whose server isn't in this user's visible list
+   * still get a bucket of their own rather than silently disappearing from
+   * a dropdown they used to appear in. */
+  const zoneGroups = useMemo(() => {
+    if (!isZoneTarget) return []
+    const byServer = new Map<string, { label: string; zones: { id: string; name: string }[] }>()
+    for (const server of servers ?? []) {
+      byServer.set(server.id, { label: server.name, zones: [] })
+    }
+    for (const zone of zones ?? []) {
+      const bucket = byServer.get(zone.serverId)
+      if (bucket) bucket.zones.push({ id: zone.id, name: zone.name })
+      else byServer.set(zone.serverId, { label: "Unknown Music Server", zones: [{ id: zone.id, name: zone.name }] })
+    }
+    return Array.from(byServer.entries())
+      .filter(([, bucket]) => bucket.zones.length > 0)
+      .map(([serverId, bucket]) => ({ serverId, ...bucket }))
+  }, [isZoneTarget, servers, zones])
+
+  // Drives the trigger's selected-value label, so it has to cover every
+  // selectable id — grouped or not.
+  const itemsMap = isZoneTarget
+    ? Object.fromEntries(zoneGroups.flatMap((g) => g.zones.map((z) => [z.id, z.name])))
+    : Object.fromEntries((options ?? []).map((o) => [o.id, o.label]))
+
+  async function onConfirm() {
+    if (!targetId) return
+    await assign.mutateAsync({ playlistId, targetType, targetId })
+    setOpen(false)
+    setTargetId("")
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger render={
+        <Button variant="outline" size="sm">
+          <Share2 className="size-4" /> Assign
+        </Button>
+      } />
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Assign Playlist</DialogTitle>
+          <DialogDescription>Choose where this playlist should apply.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <Select
+            value={targetType}
+            onValueChange={(v) => {
+              if (v) {
+                setTargetType(v as PlaylistAssignment["targetType"])
+                setTargetId("")
+              }
+            }}
+            items={Object.fromEntries(TARGET_TYPES.map((t) => [t.value, t.label]))}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {TARGET_TYPES.map((t) => (
+                <SelectItem key={t.value} value={t.value}>
+                  {t.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={targetId} onValueChange={(v) => v && setTargetId(v)} items={itemsMap}>
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Select target" />
+            </SelectTrigger>
+            <SelectContent>
+              {isZoneTarget
+                ? zoneGroups.map((group) => (
+                    <SelectGroup key={group.serverId}>
+                      <SelectLabel>{group.label}</SelectLabel>
+                      {group.zones.map((zone) => (
+                        <SelectItem key={zone.id} value={zone.id}>
+                          {zone.name}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  ))
+                : options?.map((opt) => (
+                    <SelectItem key={opt.id} value={opt.id}>
+                      {opt.label}
+                    </SelectItem>
+                  ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <DialogFooter>
+          <Button onClick={onConfirm} disabled={!targetId || assign.isPending}>
+            {assign.isPending && <Loader2 className="size-4 animate-spin" />}
+            Assign
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}

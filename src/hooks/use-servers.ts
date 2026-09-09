@@ -68,6 +68,28 @@ export function useSimulateAgentConnected() {
   })
 }
 
+/** "Forget Server" — SUPER_ADMIN only. Waits for the Windows agent to
+ * confirm it has shut the player down before the cloud row disappears, so
+ * this mutation can stay pending for up to ~30s. Never optimistic: a
+ * failure leaves the server exactly where it was. */
+export function useForgetServer() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => serversApi.forget(id),
+    onSuccess: (result) => {
+      qc.invalidateQueries({ queryKey: ["servers"] })
+      qc.invalidateQueries({ queryKey: ["zones"] })
+      qc.invalidateQueries({ queryKey: ["commands"] })
+      qc.invalidateQueries({ queryKey: ["dashboard-stats"] })
+      // Offline/never-paired still deletes the row, but the operator needs
+      // to know nothing was stopped on site.
+      if (result.agentReached) toast.success(result.message)
+      else toast.warning(result.message)
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+}
+
 export function useDeleteServer() {
   const qc = useQueryClient()
   return useMutation({

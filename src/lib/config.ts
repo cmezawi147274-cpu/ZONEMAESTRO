@@ -21,8 +21,8 @@ export const env = {
    * portal be built and demoed before the real backend and Windows
    * MusicServer integration exist. */
   useMockApi: readBool(process.env.NEXT_PUBLIC_USE_MOCK_API, false),
-  appName: "Cloud Music Management Portal",
-  appShortName: "CMMP",
+  appName: "ZoneMaestro",
+  appShortName: "ZoneMaestro",
 } as const
 
 export const isMockMode = env.useMockApi

@@ -277,6 +277,11 @@ export const servers: MusicServer[] = serverSpecs.map((spec) => {
     cachedSizeGb: Number((rand(2, 18) + Math.random()).toFixed(1)),
     pendingSyncJobs: spec.status === "OFFLINE" ? rand(1, 5) : rand(0, 2),
     createdAt: isoDaysAgo(rand(30, 300)),
+    autoBootEnabled: true,
+    // Mock agents don't report a clock, so the demo portal honestly shows
+    // "using portal location" rather than a fake green pill.
+    reportedTimezone: null,
+    reportedLocationAt: null,
   }
 })
 
@@ -316,6 +321,7 @@ export const zones: Zone[] = servers.flatMap((server, idx) => {
       lastAppliedSequence: 0,
       lastOverrideAt: null,
       excludedTrackIds: [],
+      equalizer: null,
     }
   })
 })

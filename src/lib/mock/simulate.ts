@@ -88,7 +88,13 @@ function tickCommands() {
     // USER/SCHEDULE commands. For SUPER_ADMIN commands this re-applies the
     // same state the optimistic path already set — a harmless no-op that
     // simply confirms what the UI already showed (see zone-effects.ts).
-    if (!failed) applyZoneCommandEffect(inFlight)
+    if (!failed) {
+      applyZoneCommandEffect(inFlight)
+      if (inFlight.type === "SET_AUTO_BOOT" && typeof inFlight.payload?.enabled === "boolean") {
+        const server = store.servers.find((s) => s.id === inFlight.serverId)
+        if (server) server.autoBootEnabled = inFlight.payload.enabled
+      }
+    }
     emit({ type: "COMMAND_COMPLETED", serverId: inFlight.serverId, data: { command: inFlight } })
     store.pushActivity({
       type: "COMMAND_COMPLETED",

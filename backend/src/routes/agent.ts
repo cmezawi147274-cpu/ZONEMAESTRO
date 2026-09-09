@@ -18,10 +18,13 @@ import { env } from "../lib/env.js"
 import { badRequest, notFound, HttpError } from "../lib/http-error.js"
 import { requireAgent, generateAgentToken, sha256Hex } from "../lib/agent-auth.js"
 import { hashPairingCode, normalizePairingCode } from "../lib/pairing.js"
+import { seededShuffle } from "../lib/shuffle.js"
 import { markAgentSeen, resolveAck, forgetAgent } from "../lib/agent-registry.js"
 import { emitEvent } from "../realtime.js"
 import { pushActivity } from "../lib/activity.js"
 import { MUSIC_SERVER_HUB_PATH } from "../agent/signalrHub.js"
+import { isValidTimeZone } from "../lib/geo.js"
+import { ZONE_TRANSPORT_TYPES } from "./commands.js"
 import type { CommandStatus, ZonePlaybackState } from "@prisma/client"
 
 /** ASP.NET model binding is case-insensitive; the compiled agent's own
@@ -43,6 +46,35 @@ function str(body: Record<string, unknown>, ...names: string[]): string | undefi
 function num(body: Record<string, unknown>, ...names: string[]): number | undefined {
   const v = field(body, ...names)
   return typeof v === "number" ? v : undefined
+}
+function bool(body: Record<string, unknown>, ...names: string[]): boolean | undefined {
+  const v = field(body, ...names)
+  return typeof v === "boolean" ? v : undefined
+}
+
+/** Only a timezone Intl actually accepts is stored — a typo or a Windows
+ * zone name that slipped through must not poison prayer calculations. */
+function validTimeZoneOrNull(value: string | undefined): string | null {
+  return isValidTimeZone(value) ? value : null
+}
+
+/**
+ * Latitude/longitude are optional and only honored as a matched, in-range
+ * pair. 0,0 is rejected outright: it is the classic "unset GPS" reading,
+ * and treating it as a real fix is exactly the bug that had prayer times
+ * being calculated for a point in the Atlantic.
+ */
+function coordinateUpdate(
+  body: Record<string, unknown>,
+  server: { reportedLatitude: number | null; reportedLongitude: number | null }
+): { reportedLatitude?: number; reportedLongitude?: number } {
+  const latitude = num(body, "latitude", "lat")
+  const longitude = num(body, "longitude", "lng", "lon")
+  if (latitude === undefined || longitude === undefined) return {}
+  if (latitude === 0 && longitude === 0) return {}
+  if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return {}
+  if (latitude === server.reportedLatitude && longitude === server.reportedLongitude) return {}
+  return { reportedLatitude: latitude, reportedLongitude: longitude }
 }
 
 async function localZoneIdOf(zoneId: string | null): Promise<string | null> {
@@ -109,12 +141,9 @@ export default async function agentRoutes(app: FastifyInstance) {
       update: { agentServerGuid, siteId: siteId ?? null, lastSeenAt: now },
     })
 
-    // An agent that re-pairs to a different server row leaves the row it
-    // came from holding a token nothing will ever use again: it lingers in
-    // the portal as a server that is permanently OFFLINE, indistinguishable
-    // from a venue whose PC is switched off. The agent reports the row it
-    // was previously bound to, and that binding is released here so the old
-    // row falls back to "never connected" instead of becoming a zombie.
+    // An agent re-pairing to a different server row leaves its old row
+    // holding a token nothing will use again — a permanently OFFLINE
+    // duplicate in the portal. Release it here.
     const previousServerId = str(body, "previousServerId")
     if (previousServerId && previousServerId !== server.id) {
       const previous = await prisma.musicServer.findUnique({ where: { id: previousServerId } })
@@ -169,6 +198,7 @@ export default async function agentRoutes(app: FastifyInstance) {
     if (str(body, "serverVersion") === undefined) throw badRequest("The ServerVersion field is required.")
 
     const wasOffline = ctx.server.status === "OFFLINE" || ctx.server.status === "UNKNOWN"
+    const reportedTimezone = validTimeZoneOrNull(str(body, "timezone", "timeZone"))
     const updated = await prisma.musicServer.update({
       where: { id: ctx.serverId },
       data: {
@@ -183,6 +213,19 @@ export default async function agentRoutes(app: FastifyInstance) {
         cachedTracks: num(body, "cachedTracks") ?? ctx.server.cachedTracks,
         cachedSizeGb: num(body, "cachedSizeGb") ?? ctx.server.cachedSizeGb,
         ipAddress: str(body, "ipAddress") ?? ctx.server.ipAddress,
+        autoBootEnabled: bool(body, "autoBootEnabled") ?? ctx.server.autoBootEnabled,
+        // The venue PC's own IANA timezone — what Prayer Mode fires on.
+        // Only accepted if Intl recognizes it, so a malformed value can
+        // never reach the date math (lib/prayer-location.ts).
+        reportedTimezone: reportedTimezone ?? ctx.server.reportedTimezone,
+        // Stamped only when a *usable* timezone actually arrived on this
+        // beat, so the portal's pill can tell "reporting now" from "reported
+        // once, weeks ago" — an ordinary heartbeat must not refresh it.
+        ...(reportedTimezone ? { reportedLocationAt: new Date() } : {}),
+        // Coordinates are only ever stored when the agent genuinely knows
+        // them. An agent that doesn't send them leaves these null, and the
+        // venue's city is looked up instead — 0,0 is never written here.
+        ...coordinateUpdate(body, ctx.server),
       },
     })
     markAgentSeen(ctx.serverId)
@@ -244,6 +287,28 @@ export default async function agentRoutes(app: FastifyInstance) {
     const command = await prisma.remoteCommand.findUnique({ where: { id: commandId } })
     if (!command || command.serverId !== ctx.serverId) throw notFound("Command")
 
+    // A command already in a terminal state (the cloud gave up and recorded
+    // TIMEOUT, or a duplicate/delayed ack repeats a status already
+    // recorded) must not be re-resolved by an ack that arrives after the
+    // fact. Root cause this closed off: SET_EQ writes straight to
+    // EqualizerAPO's config.txt, and firing one from the portal while the
+    // Windows side is still mid-write/reload on a *previous* one throws
+    // EBUSY there; the agent's own retry-with-backoff can then run long
+    // enough that its eventual SUCCESS ack lands after the cloud's ack
+    // wait already expired and recorded TIMEOUT. Before this check, that
+    // late ack silently flipped the row to SUCCESS — and since a
+    // SUCCESS ack usually carries no resultMessage of its own, the `??`
+    // fallback below kept the *TIMEOUT's* "No response ... within Xms"
+    // text attached to a status that now claimed to have worked. Found by
+    // querying the command history: 22 rows married exactly that
+    // contradiction. The real fix (serializing/atomically writing
+    // config.txt) belongs on the Windows side; this only stops the cloud
+    // from lying about which one actually happened.
+    if (["SUCCESS", "FAILED", "TIMEOUT"].includes(command.status)) {
+      markAgentSeen(ctx.serverId)
+      return reply.send({ ok: true, note: "Command already resolved; this ack was not applied." })
+    }
+
     const resultMessage = str(body, "resultMessage") ?? null
     const now = new Date()
     const updated = await prisma.remoteCommand.update({
@@ -268,6 +333,19 @@ export default async function agentRoutes(app: FastifyInstance) {
       if (playbackState && ZONE_STATE_MAP[playbackState.toUpperCase()]) data.playbackState = ZONE_STATE_MAP[playbackState.toUpperCase()]
       const currentTrackId = str(zoneState, "currentTrackId")
       if (currentTrackId) data.currentTrackId = currentTrackId
+      // The agent's zoneState read-back (agent-bridge/lib/agent.js
+      // readBackZoneState) never reports the equalizer — EqualizerAPO's
+      // config.txt has no "what's currently applied" query, only a write
+      // path — so it's carried here from the command's own payload instead
+      // (the same payload ../lib/zone-effects.ts applyZoneCommandEffect
+      // would otherwise apply). Without this, a SET_EQ ack still lands here
+      // (volume/muted/playbackState are always present), which sets
+      // lastAppliedSequence below and makes ../routes/commands.ts skip its
+      // applyZoneCommandEffect fallback as "already applied" — silently
+      // dropping the EQ change even though the Windows side wrote it fine.
+      if (updated.type === "SET_EQ" && command.payload && typeof command.payload === "object") {
+        data.equalizer = command.payload
+      }
       if (Object.keys(data).length > 0) {
         // Mark this command's sequence as applied so ../routes/commands.ts'
         // fallback (../lib/zone-effects.ts#applyZoneCommandEffect) doesn't
@@ -280,12 +358,45 @@ export default async function agentRoutes(app: FastifyInstance) {
       emitEvent({ type: "PLAYBACK_CHANGED", serverId: ctx.serverId, zoneId: updated.zoneId, data: { commandId, type: updated.type } })
     }
 
+    // SET_AUTO_BOOT has no zone — persist the confirmed value directly onto
+    // the server row so the portal reflects it without waiting for the next
+    // heartbeat (see also the heartbeat handler above, which reports the
+    // same field from C:\ProgramData\MusicServer\auto-boot.json on its own
+    // cadence — belt-and-suspenders if a heartbeat and this ack race).
+    if (updated.type === "SET_AUTO_BOOT" && status === "SUCCESS") {
+      const payload = command.payload as Record<string, unknown> | null
+      const enabled = payload && typeof payload.enabled === "boolean" ? payload.enabled : undefined
+      if (enabled !== undefined) {
+        await prisma.musicServer.update({ where: { id: ctx.serverId }, data: { autoBootEnabled: enabled } })
+      }
+    }
+
     if (status === "SUCCESS" || status === "FAILED" || status === "TIMEOUT") {
       await pushActivity({
         type: "COMMAND_COMPLETED",
         message: `${updated.type.replaceAll("_", " ")} ${status === "SUCCESS" ? "completed" : status.toLowerCase()} on ${ctx.server.name}${resultMessage ? `: ${resultMessage}` : "."}`,
         serverId: ctx.serverId,
         zoneId: updated.zoneId,
+      })
+    }
+
+    // A failed server-level command (Forget, Restart Playback, Sync, Auto
+    // Boot) is otherwise invisible unless someone happens to open
+    // /commands: the operator who triggered it may have moved on assuming
+    // success (the FORGET_SERVER bug this closes: a broken agent-bridge
+    // config acked FAILED, and nothing else ever said so). A persistent
+    // Alert fixes that. Routine zone transport is excluded — its failure
+    // already throws straight back to the button-presser (see
+    // ../routes/commands.ts), so a duplicate Alert for a momentary
+    // offline PLAY/PAUSE would just be noise on the Alerts page.
+    if (status === "FAILED" && !ZONE_TRANSPORT_TYPES.has(updated.type)) {
+      await prisma.alert.create({
+        data: {
+          severity: "warning",
+          title: `${updated.type.replaceAll("_", " ")} failed`,
+          message: `${ctx.server.name}: ${resultMessage ?? "The Windows Music Server reported failure with no further detail."}`,
+          serverId: ctx.serverId,
+        },
       })
     }
 
@@ -351,7 +462,15 @@ export default async function agentRoutes(app: FastifyInstance) {
     const ctx = await requireAgent(request)
     const body = request.body ?? {}
     const zonesRaw = field(body, "zones")
-    const zones = Array.isArray(zonesRaw) ? zonesRaw : []
+    // A genuine JSON array (even an empty one — the machine really has no
+    // zones) is what makes this report authoritative enough to prune from.
+    // A missing/malformed "zones" field is not: it never reaches
+    // cmmp.syncZones() in the first place when the agent's own local.getZones()
+    // failed (agent-bridge/lib/agent.js heartbeatOnce's catch skips the call
+    // entirely), so treating a missing field as "zero zones" here would wipe
+    // every zone on this server over a request that was never a real report.
+    const zonesReported = Array.isArray(zonesRaw)
+    const zones = zonesReported ? zonesRaw : []
 
     const mapping: { localZoneId: string; zoneId: string }[] = []
     for (const raw of zones) {
@@ -388,6 +507,29 @@ export default async function agentRoutes(app: FastifyInstance) {
       emitEvent({ type: "ZONE_STATUS_CHANGED", serverId: ctx.serverId, zoneId: zone.id, data: { zoneId: zone.id, source: "AGENT" } })
     }
 
+    // Local -> cloud delete (Task 1): a zone this server used to report but
+    // no longer does is gone locally, so its cloud row is pruned too — a
+    // deleted-locally zone must not linger here as a STOPPED ghost. Only
+    // ever touches rows with a real localZoneId (never a cloud-only zone
+    // that simply hasn't synced yet, since those have localZoneId null).
+    if (zonesReported) {
+      const reportedLocalIds = mapping.map((m) => m.localZoneId)
+      const staleZones = await prisma.zone.findMany({
+        where: {
+          serverId: ctx.serverId,
+          localZoneId: { not: null },
+          NOT: { localZoneId: { in: reportedLocalIds } },
+        },
+        select: { id: true },
+      })
+      if (staleZones.length > 0) {
+        await prisma.zone.deleteMany({ where: { id: { in: staleZones.map((z) => z.id) } } })
+        for (const z of staleZones) {
+          emitEvent({ type: "ZONE_STATUS_CHANGED", serverId: ctx.serverId, zoneId: z.id, data: { zoneId: z.id, source: "AGENT" } })
+        }
+      }
+    }
+
     markAgentSeen(ctx.serverId)
     return reply.send({ zones: mapping })
   })
@@ -408,7 +550,14 @@ export default async function agentRoutes(app: FastifyInstance) {
           localZoneId: zone.localZoneId ?? zone.id,
           zoneId: zone.id,
           playlistId: zone.currentPlaylistId,
-          trackIds: playlist ? playlist.tracks.map((t) => t.trackId) : [],
+          // Randomised, not the order tracks were added — seeded on
+          // zone+playlist so it stays put while this assignment lasts.
+          trackIds: playlist
+            ? seededShuffle(
+                playlist.tracks.map((t) => t.trackId),
+                `${zone.id}:${playlist.id}`
+              )
+            : [],
           excludedTrackIds: zone.excludedTrackIds,
           currentTrackId: zone.currentTrackId,
         }
@@ -425,10 +574,32 @@ export default async function agentRoutes(app: FastifyInstance) {
   // --------------------------------------------------------------------
   app.get(`${p}/server/schedules`, async (request, reply) => {
     const ctx = await requireAgent(request)
-    const zones = await prisma.zone.findMany({ where: { serverId: ctx.serverId }, select: { id: true, localZoneId: true } })
+    const zones = await prisma.zone.findMany({
+      where: { serverId: ctx.serverId },
+      select: { id: true, localZoneId: true, excludedTrackIds: true },
+    })
     const zoneIds = zones.map((z) => z.id)
     const localOf = new Map(zones.map((z) => [z.id, z.localZoneId ?? z.id]))
+    const excludedOf = new Map(zones.map((z) => [z.id, z.excludedTrackIds]))
     const schedules = await prisma.schedule.findMany({ where: { zoneId: { in: zoneIds }, enabled: true }, orderBy: { startTime: "asc" } })
+
+    // Each slot's own track list, not just its playlistId: a schedule can
+    // name a playlist the zone isn't currently playing, and the agent has
+    // no other way to reach that playlist's tracks (it authenticates as an
+    // agent, not a portal session, so it cannot call GET /playlists/:id).
+    // Bundling it here means "the schedules API" stays the one system —
+    // no second sync surface for schedule-driven playback.
+    const playlistIds = Array.from(new Set(schedules.map((s) => s.playlistId)))
+    const playlistTracks = playlistIds.length
+      ? await prisma.playlistTrack.findMany({ where: { playlistId: { in: playlistIds } }, orderBy: { position: "asc" } })
+      : []
+    const tracksByPlaylist = new Map<string, string[]>()
+    for (const pt of playlistTracks) {
+      const arr = tracksByPlaylist.get(pt.playlistId)
+      if (arr) arr.push(pt.trackId)
+      else tracksByPlaylist.set(pt.playlistId, [pt.trackId])
+    }
+
     markAgentSeen(ctx.serverId)
     return reply.send({
       schedules: schedules.map((s) => ({
@@ -436,6 +607,8 @@ export default async function agentRoutes(app: FastifyInstance) {
         localZoneId: localOf.get(s.zoneId) ?? s.zoneId,
         zoneId: s.zoneId,
         playlistId: s.playlistId,
+        trackIds: seededShuffle(tracksByPlaylist.get(s.playlistId) ?? [], `${s.zoneId}:${s.playlistId}`),
+        excludedTrackIds: excludedOf.get(s.zoneId) ?? [],
         name: s.name,
         startTime: s.startTime,
         endTime: s.endTime,

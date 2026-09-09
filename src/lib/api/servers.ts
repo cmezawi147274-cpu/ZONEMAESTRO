@@ -12,6 +12,15 @@ export interface RegisterServerInput {
   locationId: string
 }
 
+/** Outcome of "Forget Server". `agentReached` is false when the Windows
+ * machine was offline or never paired — the cloud row is still gone, but
+ * nothing was shut down on site. */
+export interface ForgetServerResult {
+  deleted: boolean
+  agentReached: boolean
+  message: string
+}
+
 function generatePairingCode(): string {
   // Human-typeable, unambiguous alphabet (no 0/O/1/I) — matches what a
   // Windows MusicServer installer would ask an on-site tech to key in.
@@ -81,6 +90,9 @@ export const serversApi = {
         cachedSizeGb: 0,
         pendingSyncJobs: 0,
         createdAt: new Date().toISOString(),
+        autoBootEnabled: true,
+        reportedTimezone: null,
+        reportedLocationAt: null,
       }
       store.servers.push(server)
       store.recomputeCounts()
@@ -128,6 +140,35 @@ export const serversApi = {
       return
     }
     await apiClient.delete(`/servers/${id}`)
+  },
+
+  /** "Forget Server" — SUPER_ADMIN only. Unlike `remove()` (cloud unpair
+   * only), this first tells the Windows agent to stop the player, turn
+   * auto-start off and wipe its local pairing/cache; the cloud row is
+   * deleted only once that lands, or immediately when the agent is offline
+   * / was never paired. See backend/src/routes/servers.ts. */
+  async forget(id: string): Promise<ForgetServerResult> {
+    if (isMockMode) {
+      await delay(600)
+      const server = store.servers.find((s) => s.id === id)
+      if (!server) throw new Error("Server not found.")
+      const agentReached = server.status !== "OFFLINE" && server.status !== "UNKNOWN"
+      store.servers = store.servers.filter((s) => s.id !== id)
+      store.zones = store.zones.filter((z) => z.serverId !== id)
+      store.commands = store.commands.filter((c) => c.serverId !== id)
+      store.trackSyncStates = store.trackSyncStates.filter((t) => t.serverId !== id)
+      store.alerts = store.alerts.filter((a) => a.serverId !== id)
+      store.logs = store.logs.filter((l) => l.serverId !== id)
+      store.recomputeCounts()
+      return {
+        deleted: true,
+        agentReached,
+        message: agentReached
+          ? `${server.name} was shut down, wiped and removed from the portal.`
+          : `${server.name} was removed from the portal, but it is offline — the Windows machine could not be reached, so a player process may still be running there.`,
+      }
+    }
+    return apiClient.post<ForgetServerResult>(`/servers/${id}/forget`)
   },
 
   async logs(id: string, limit = 100): Promise<LogEntry[]> {

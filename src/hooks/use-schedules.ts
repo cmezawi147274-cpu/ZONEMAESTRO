@@ -4,8 +4,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { schedulesApi, type CreateScheduleInput } from "@/lib/api/schedules"
 import { toast } from "sonner"
 
-export function useSchedules(filters?: { zoneId?: string; serverId?: string }) {
-  return useQuery({ queryKey: ["schedules", filters ?? {}], queryFn: () => schedulesApi.list(filters) })
+export function useSchedules(filters?: { zoneId?: string; serverId?: string }, options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: ["schedules", filters ?? {}],
+    queryFn: () => schedulesApi.list(filters),
+    enabled: options?.enabled ?? true,
+  })
 }
 
 export function useCreateSchedule() {

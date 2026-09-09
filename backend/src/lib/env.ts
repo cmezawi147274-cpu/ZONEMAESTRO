@@ -38,24 +38,30 @@ export const env = {
   // stock agent install works with zero configuration; override only if
   // fronting this behind a path-rewriting proxy.
   agentApiPrefix: process.env.AGENT_API_PREFIX ?? "/api",
-  agentPairingCodeTtlMinutes: Number(process.env.SERVER_PAIRING_CODE_TTL_MINUTES ?? 15),
+  agentPairingCodeTtlMinutes: Number(process.env.SERVER_PAIRING_CODE_TTL_MINUTES ?? 60),
+  // How long an UNPAIRED server row (status UNKNOWN, no agentTokenHash)
+  // survives past its code's own expiry before the sweep deletes it —
+  // deliberately independent of agentPairingCodeTtlMinutes above. An
+  // expired code just means POST /servers/:id/pairing-code needs pressing
+  // again; it does not mean the venue registration itself is junk. See
+  // lib/agent-sweep.ts startExpiredPairingSweep().
+  agentUnpairedRetentionDays: Number(process.env.SERVER_UNPAIRED_RETENTION_DAYS ?? 7),
   // A server with no heartbeat for this many seconds is swept to OFFLINE.
   agentHeartbeatIntervalSeconds: Number(process.env.SERVER_HEARTBEAT_INTERVAL_SECONDS ?? 15),
   agentOfflineAfterMissedBeats: Number(process.env.SERVER_OFFLINE_AFTER_MISSED_BEATS ?? 3),
   // How long a zone transport command (PLAY/PAUSE/.../MUTE) waits for the
   // agent's ack before the portal request fails.
   agentCommandAckTimeoutMs: Number(process.env.AGENT_COMMAND_ACK_TIMEOUT_MS ?? 3000),
+  // "Forget Server" waits far longer than a transport command: the agent has
+  // to stop the Windows service, kill the playback processes, turn auto-start
+  // off and wipe its local pairing before it can ack. The cloud row is only
+  // deleted once that ack lands (see routes/servers.ts).
+  agentForgetAckTimeoutMs: Number(process.env.AGENT_FORGET_ACK_TIMEOUT_MS ?? 30000),
 }
 
-/**
- * PUBLIC_API_URL is the one setting whose being wrong produces no error
- * anywhere: every venue's agent is handed a music download URL built from
- * it, so a placeholder or localhost value means agents fetch whatever
- * answers that hostname — a parked domain returns an HTML page with status
- * 200, which lands in the venue's library as an unplayable "track". The
- * symptom shows up days later as "the music won't play", far from the
- * cause. Checked at boot so it is caught on deploy instead.
- */
+/** PUBLIC_API_URL failing is silent everywhere else: agents are handed a
+ * music URL built from it, so a placeholder value makes them download
+ * whatever answers that hostname. Checked at boot instead. */
 export function publicApiUrlProblem(): string | null {
   const u = env.publicApiUrl
   if (/your-domain|example\.com|changeme|yourdomain/i.test(u)) {

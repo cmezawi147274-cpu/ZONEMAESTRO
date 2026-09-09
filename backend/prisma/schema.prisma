@@ -69,7 +69,14 @@ enum CommandType {
   SET_VOLUME
   MUTE
   UNMUTE
+  // Zone transport command, same tier as SET_VOLUME — rides the same
+  // portal -> /commands -> agent -> local-api path so a 10-band curve
+  // actually reaches that zone's own output, not just the cloud. See
+  // agent-bridge/lib/local-api.js and its `setEqualizer`.
+  SET_EQ
   REBOOT_SERVER
+  SET_AUTO_BOOT
+  FORGET_SERVER
 }
 
 enum ZonePlaybackState {
@@ -164,8 +171,31 @@ model Organization {
   servers      MusicServer[]
   playlists    Playlist[]
   prayerConfig PrayerConfig?
+  eqPresets    EqPreset[]
 
   @@index([slug])
+}
+
+/// An operator-saved equalizer curve, shared across the organization — the
+/// user-defined counterpart to the built-in curves hard-coded in
+/// src/lib/equalizer/presets.ts (Flat, Dinner, Bar, Speech, Outdoor). Only
+/// the 10 band gains are stored: bassBoost/loudness/virtualizer are
+/// per-zone hardware-ish trims rather than part of a curve's identity, and
+/// the built-in presets don't carry them either.
+model EqPreset {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  /// Exactly 10 gains in dB, same fixed band order as EQ_BANDS.
+  bands          Json
+  createdById    String?
+  createdAt      DateTime     @default(now())
+
+  /// Two operators can't end up with two different curves both called
+  /// "Friday Night" in the same org — saving that name overwrites instead.
+  @@unique([organizationId, name])
+  @@index([organizationId])
 }
 
 model Location {
@@ -221,6 +251,26 @@ model MusicServer {
   cachedTracks     Int          @default(0)
   cachedSizeGb     Float        @default(0)
   createdAt        DateTime     @default(now())
+  // Whether the Windows MusicServer should auto-start on boot (service
+  // Automatic + scheduled tasks + cloud-link startup shortcut). Defaults to
+  // true after SETUP; toggled via the SET_AUTO_BOOT command and reported
+  // back on every heartbeat/ack from C:\ProgramData\MusicServer\auto-boot.json.
+  autoBootEnabled  Boolean      @default(true)
+  // The venue PC's own IANA timezone, as the agent reports it each
+  // heartbeat (Intl.DateTimeFormat().resolvedOptions().timeZone). Prayer
+  // times fire on this clock, never the cloud host's. Null until an agent
+  // running a build new enough to send it has checked in; the Location's
+  // timezone is the fallback.
+  reportedTimezone   String?
+  // Real coordinates, only ever set when the agent actually knows them.
+  // Never defaulted to 0,0 — when these are null the venue's coordinates
+  // are resolved from its Location's city/country instead (lib/geo.ts).
+  reportedLatitude   Float?
+  reportedLongitude  Float?
+  // When a *usable* timezone last arrived on a heartbeat. Drives the
+  // portal's venue-location pill (fresh vs stale) and picks the winner when
+  // several servers share one Location — see lib/prayer-location.ts.
+  reportedLocationAt DateTime?
 
   zones          Zone[]
   commands       RemoteCommand[]
@@ -291,6 +341,20 @@ model Zone {
   // of duplicating. Backend-only addition, not in the frozen top-level
   // schema.
   localZoneId String?
+
+  // Per-zone equalizer: master on/off, 10 band gains, preset id ("custom"
+  // when a band has been hand-edited off-preset), and the Bass Boost /
+  // Loudness / Virtualizer modules. Shape is src/lib/api/types.ts
+  // ZoneEqualizerSettings. Normally written straight from the command's
+  // own payload in routes/agent.ts' SET_EQ ack handling, not from the
+  // agent's zoneState read-back — EqualizerAPO's config.txt has no
+  // "what's applied" query, so that read-back never reports it (see the
+  // comment there); routes/commands.ts' applyZoneCommandEffect() (lib/
+  // zone-effects.ts) is only the fallback for the rarer case where the ack
+  // carried no zoneState at all. Never written directly by any other
+  // route. Null means "never configured" (flat, off); the frontend
+  // supplies its own default rather than this column carrying one.
+  equalizer Json?
 
   schedules Schedule[]
   commands  RemoteCommand[]

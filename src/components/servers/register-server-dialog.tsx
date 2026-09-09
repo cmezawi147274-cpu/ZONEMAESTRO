@@ -22,6 +22,8 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { useOrganizations } from "@/hooks/use-organizations"
 import { useLocations } from "@/hooks/use-locations"
 import { useRegisterServer, useSimulateAgentConnected } from "@/hooks/use-servers"
+import { copyToClipboard } from "@/lib/clipboard"
+import { toast } from "sonner"
 import { isMockMode } from "@/lib/config"
 import type { MusicServer } from "@/lib/api/types"
 
@@ -180,10 +182,15 @@ export function RegisterServerDialog() {
             <div className="flex items-center justify-center gap-3 rounded-lg border bg-muted/40 p-6">
               <span className="font-mono text-3xl font-semibold tracking-widest">{registered.pairingCode}</span>
               <Button
+                type="button"
                 variant="ghost"
                 size="icon"
-                onClick={() => {
-                  navigator.clipboard.writeText(registered.pairingCode ?? "")
+                onClick={async () => {
+                  const copied = await copyToClipboard(registered.pairingCode ?? "")
+                  if (!copied) {
+                    toast.error("Could not copy the pairing code — select it and copy manually.")
+                    return
+                  }
                   setCopied(true)
                   setTimeout(() => setCopied(false), 1500)
                 }}

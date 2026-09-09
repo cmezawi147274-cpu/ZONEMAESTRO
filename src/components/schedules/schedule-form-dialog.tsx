@@ -39,7 +39,22 @@ const schema = z.object({
 
 type FormValues = z.infer<typeof schema>
 
-export function ScheduleFormDialog({ schedule }: { schedule?: Schedule }) {
+export function ScheduleFormDialog({
+  schedule,
+  zoneId,
+  triggerLabel,
+}: {
+  schedule?: Schedule
+  /** Locks the zone this slot applies to — used from the zone card's own
+   * schedule dialog (src/components/zones/zone-schedule-dialog.tsx), where
+   * the zone is already known and re-picking it would be redundant. The
+   * Zone dropdown itself is hidden rather than disabled; every other field
+   * (and the dropdowns that remain) stay exactly as on /schedules. */
+  zoneId?: string
+  /** Trigger button text for create mode. Defaults to "New Schedule"
+   * (the /schedules page); the zone card's dialog passes "Add time slot". */
+  triggerLabel?: string
+}) {
   const [open, setOpen] = useState(false)
   const { data: zones } = useZones()
   const { data: playlists } = usePlaylists()
@@ -50,12 +65,24 @@ export function ScheduleFormDialog({ schedule }: { schedule?: Schedule }) {
     resolver: zodResolver(schema),
     defaultValues: schedule
       ? { ...schedule }
-      : { zoneId: "", playlistId: "", name: "", startTime: "08:00", endTime: "12:00", days: ["MON", "TUE", "WED", "THU", "FRI"], priority: 1, enabled: true },
+      : {
+          zoneId: zoneId ?? "",
+          playlistId: "",
+          name: "",
+          startTime: "08:00",
+          endTime: "12:00",
+          days: ["MON", "TUE", "WED", "THU", "FRI"],
+          priority: 1,
+          enabled: true,
+        },
   })
 
   useEffect(() => {
-    if (open && schedule) form.reset({ ...schedule })
-  }, [open, schedule, form])
+    if (!open) return
+    if (schedule) form.reset({ ...schedule })
+    else if (zoneId) form.setValue("zoneId", zoneId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, schedule, zoneId])
 
   async function onSubmit(values: FormValues) {
     if (schedule) await update.mutateAsync({ id: schedule.id, ...values })
@@ -75,7 +102,7 @@ export function ScheduleFormDialog({ schedule }: { schedule?: Schedule }) {
             </Button>
           ) : (
             <Button size="sm">
-              <Plus className="size-4" /> New Schedule
+              <Plus className="size-4" /> {triggerLabel ?? "New Schedule"}
             </Button>
           )
         }
@@ -100,35 +127,37 @@ export function ScheduleFormDialog({ schedule }: { schedule?: Schedule }) {
                 </FormItem>
               )}
             />
-            <div className="grid grid-cols-2 gap-3">
-              <FormField
-                control={form.control}
-                name="zoneId"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Zone</FormLabel>
-                    <Select
-                      value={field.value}
-                      onValueChange={field.onChange}
-                      items={Object.fromEntries((zones ?? []).map((z) => [z.id, z.name]))}
-                    >
-                      <FormControl>
-                        <SelectTrigger className="w-full">
-                          <SelectValue placeholder="Select zone" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        {zones?.map((z) => (
-                          <SelectItem key={z.id} value={z.id}>
-                            {z.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+            <div className={zoneId ? "grid grid-cols-1 gap-3" : "grid grid-cols-2 gap-3"}>
+              {!zoneId && (
+                <FormField
+                  control={form.control}
+                  name="zoneId"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Zone</FormLabel>
+                      <Select
+                        value={field.value}
+                        onValueChange={field.onChange}
+                        items={Object.fromEntries((zones ?? []).map((z) => [z.id, z.name]))}
+                      >
+                        <FormControl>
+                          <SelectTrigger className="w-full">
+                            <SelectValue placeholder="Select zone" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          {zones?.map((z) => (
+                            <SelectItem key={z.id} value={z.id}>
+                              {z.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
               <FormField
                 control={form.control}
                 name="playlistId"

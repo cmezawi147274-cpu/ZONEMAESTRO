@@ -1,11 +1,12 @@
 "use client"
 
 import { useMemo, useState } from "react"
-import { Search } from "lucide-react"
+import { Search, ChevronRight, ChevronDown } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { cn } from "@/lib/utils"
 import { useTracks, useMusicFolders } from "@/hooks/use-music"
 import type { Track } from "@/lib/api/types"
 
@@ -21,20 +22,36 @@ interface TrackGroup {
  * all" and "select folder" only ever touch what's currently visible under
  * the active search. The caller owns `selected` and decides what to do with
  * it (create a playlist, or PATCH one) — this component never writes.
+ *
+ * Folders start collapsed so a large library opens as a short list of
+ * folders rather than every song at once. Expansion is presentational
+ * only: it lives in component state (never persisted), and it deliberately
+ * does *not* narrow what "select all"/"select folder" act on — those stay
+ * scoped to everything matching the current search, collapsed or not, so
+ * ticking a collapsed folder still selects its tracks.
  */
 export function TrackPicker({
   selected,
   onChange,
   excludeTrackIds,
+  compact,
 }: {
   selected: string[]
   onChange: (ids: string[]) => void
   /** Tracks to hide entirely, e.g. ones already in the target playlist. */
   excludeTrackIds?: string[]
+  /** Shrinks the track list height for callers embedded in a tighter
+   * dialog (e.g. CreatePlaylistDialog). Leaves the default h-72 used by
+   * AddTracksDialog and any other caller untouched. */
+  compact?: boolean
 }) {
   const [search, setSearch] = useState("")
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set())
   const { data: tracks } = useTracks({ search: search || undefined })
   const { data: folders } = useMusicFolders()
+  // A search already narrows every group to just its matches, so hiding
+  // them behind a closed folder would bury the thing being searched for.
+  const searching = search.trim().length > 0
 
   const groups = useMemo<TrackGroup[]>(() => {
     const exclude = new Set(excludeTrackIds ?? [])
@@ -68,6 +85,15 @@ export function TrackPicker({
     onChange(selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id])
   }
 
+  function toggleExpanded(key: string) {
+    setExpandedKeys((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
   return (
     <div className="space-y-2">
       <div className="relative">
@@ -82,37 +108,55 @@ export function TrackPicker({
         </label>
       )}
 
-      <ScrollArea className="h-72 rounded-lg border">
+      <ScrollArea className={cn("rounded-lg border", compact ? "h-48" : "h-72")}>
         {groups.length === 0 ? (
           <p className="p-4 text-center text-sm text-muted-foreground">No matching tracks</p>
         ) : (
           <div className="divide-y">
             {groups.map((group) => {
+              const key = group.id ?? "unfiled"
               const ids = group.tracks.map((t) => t.id)
               const folderAllSelected = ids.every((id) => selected.includes(id))
               const folderSomeSelected = !folderAllSelected && ids.some((id) => selected.includes(id))
+              const expanded = searching || expandedKeys.has(key)
               return (
-                <div key={group.id ?? "unfiled"}>
+                <div key={key}>
                   <div className="sticky top-0 flex items-center gap-2 bg-muted/60 px-2.5 py-1.5 text-xs font-medium text-muted-foreground backdrop-blur-sm">
+                    {/* Kept a sibling of the expand control, not nested in it:
+                        ticking a collapsed folder must still select all of
+                        its tracks without also opening it. */}
                     <Checkbox
                       checked={folderAllSelected}
                       indeterminate={folderSomeSelected}
                       onCheckedChange={() => toggleFolder(ids)}
                     />
-                    <span className="truncate">{group.name}</span>
-                    <Badge variant="secondary" className="ml-auto">
-                      {group.tracks.length}
-                    </Badge>
+                    <button
+                      type="button"
+                      onClick={() => toggleExpanded(key)}
+                      aria-expanded={expanded}
+                      className="flex min-w-0 flex-1 items-center gap-1.5 text-left hover:text-foreground"
+                    >
+                      {expanded ? (
+                        <ChevronDown className="size-3.5 shrink-0" />
+                      ) : (
+                        <ChevronRight className="size-3.5 shrink-0" />
+                      )}
+                      <span className="truncate">{group.name}</span>
+                      <Badge variant="secondary" className="ml-auto">
+                        {group.tracks.length}
+                      </Badge>
+                    </button>
                   </div>
-                  {group.tracks.map((track) => (
-                    <label key={track.id} className="flex items-center gap-3 p-2.5 text-sm hover:bg-muted/40">
-                      <Checkbox checked={selected.includes(track.id)} onCheckedChange={() => toggleOne(track.id)} />
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate font-medium">{track.title}</p>
-                        <p className="truncate text-xs text-muted-foreground">{track.artist}</p>
-                      </div>
-                    </label>
-                  ))}
+                  {expanded &&
+                    group.tracks.map((track) => (
+                      <label key={track.id} className="flex items-center gap-3 p-2.5 text-sm hover:bg-muted/40">
+                        <Checkbox checked={selected.includes(track.id)} onCheckedChange={() => toggleOne(track.id)} />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate font-medium">{track.title}</p>
+                          <p className="truncate text-xs text-muted-foreground">{track.artist}</p>
+                        </div>
+                      </label>
+                    ))}
                 </div>
               )
             })}

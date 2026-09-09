@@ -7,7 +7,7 @@ import { readEffectivePrayerConfig, writePrayerConfig } from "@/lib/prayer/confi
 import { cacheKey, getCachedTimings, setCachedTimings } from "@/lib/prayer/cache"
 import { fetchPrayerTimings } from "@/lib/prayer/aladhan"
 import { calendarDateKey, todayInTimeZone } from "@/lib/prayer/timezone-math"
-import type { PrayerConfig, PrayerLocation, PrayerTimesToday } from "@/lib/api/types"
+import type { PrayerConfig, PrayerLocation, PrayerTimesToday, PrayerTimesTodayResponse } from "@/lib/api/types"
 
 export const prayerApi = {
   /** Returns the config with `location` always resolved to whatever's
@@ -55,23 +55,82 @@ export const prayerApi = {
     return CALCULATION_METHODS
   },
 
-  /** Today's prayer times for display/verification in the settings UI —
-   * cache-first, falling back to a live AlAdhan fetch, exactly like the
-   * scheduler itself, so what the admin sees here always matches what will
-   * actually trigger pauses. */
-  async getTodayTimes(location: PrayerLocation, calculationMethodId: number): Promise<PrayerTimesToday | null> {
+  /** Today's prayer times for display/verification in the settings UI.
+   *
+   * In a real deployment the cloud owns the calculation and the browser
+   * never contacts AlAdhan: GET /prayer/times/today computes against the
+   * venue's coordinates and clock, so the times an admin reads here are
+   * literally the ones the backend scheduler will pause zones on. The
+   * picked location is passed through so an unsaved choice still previews;
+   * with none, the backend resolves the venue's own.
+   *
+   * Mock mode keeps the original in-browser cache + AlAdhan path — there
+   * is no backend to ask. */
+  async getTodayTimes(
+    location: PrayerLocation,
+    calculationMethodId: number,
+    /** By default a failure is swallowed into `null` and the caller renders
+     * a generic "unavailable". Callers that would rather show the reason —
+     * the Zones cards — opt into the real network/HTTP error with
+     * `rethrow`, so a 403 or an unreachable AlAdhan is legible instead of
+     * looking like an empty result. */
+    options?: { rethrow?: boolean }
+  ): Promise<PrayerTimesTodayResponse | null> {
+    if (!isMockMode) {
+      const params = new URLSearchParams({
+        latitude: String(location.latitude),
+        longitude: String(location.longitude),
+        timezone: location.timezone,
+        method: String(calculationMethodId),
+      })
+      try {
+        return await apiClient.get<PrayerTimesTodayResponse>(`/prayer/times/today?${params.toString()}`)
+      } catch (error) {
+        // No usable location yet, or AlAdhan unreachable from the cloud —
+        // the UI renders this as "times unavailable" rather than guessing.
+        if (options?.rethrow) throw error
+        return null
+      }
+    }
+
     const today = todayInTimeZone(location.timezone)
     const key = cacheKey(calendarDateKey(today), location.latitude, location.longitude, calculationMethodId)
 
+    /** Mock has no venue heartbeat to speak of, so the location is always
+     * the portal-picked one — reported honestly rather than faked green. */
+    const asResponse = (times: PrayerTimesToday): PrayerTimesTodayResponse => ({
+      date: calendarDateKey(today),
+      timezone: location.timezone,
+      calculationMethodId,
+      times,
+      location: {
+        city: location.city,
+        country: location.country,
+        latitude: location.latitude,
+        longitude: location.longitude,
+        source: "config",
+      },
+      venue: {
+        state: "PORTAL",
+        timezone: location.timezone,
+        city: location.city,
+        country: location.country,
+        timezoneSource: "config",
+        coordinatesSource: "config",
+        serverName: null,
+      },
+    })
+
     const cached = getCachedTimings(key)
-    if (cached) return cached
+    if (cached) return asResponse(cached)
 
     try {
       const referenceInstant = new Date(Date.UTC(today.year, today.month - 1, today.day, 12))
       const { timings } = await fetchPrayerTimings(location, calculationMethodId, referenceInstant)
       setCachedTimings(key, timings)
-      return timings
-    } catch {
+      return asResponse(timings)
+    } catch (error) {
+      if (options?.rethrow) throw error
       return null
     }
   },

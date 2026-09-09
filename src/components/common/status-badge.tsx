@@ -77,3 +77,56 @@ export function ZoneStateBadge({ state, className }: { state: ZonePlaybackState;
     </Badge>
   )
 }
+
+/** Whether prayer times are being calculated from the venue PC's own clock
+ * (VENUE), from the portal's Location / custom picker (PORTAL), or from
+ * nothing usable at all (NONE). */
+export type VenueLocationState = "VENUE" | "PORTAL" | "NONE"
+
+const VENUE_LOCATION_STYLES: Record<VenueLocationState, string> = {
+  VENUE: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
+  PORTAL: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
+  NONE: "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20",
+}
+
+const VENUE_LOCATION_DOT: Record<VenueLocationState, string> = {
+  VENUE: "bg-emerald-500",
+  PORTAL: "bg-amber-500",
+  NONE: "bg-red-500",
+}
+
+const VENUE_LOCATION_LABELS: Record<VenueLocationState, string> = {
+  VENUE: "Venue location received",
+  PORTAL: "Using portal location",
+  NONE: "No venue location",
+}
+
+/**
+ * Reports whether the cloud is calculating prayer times on the venue's own
+ * clock. Green means the Windows PC's heartbeat supplied the timezone —
+ * coordinates falling back to a city lookup does not downgrade it, because
+ * the clock is what prayer scheduling actually fires on.
+ *
+ * `title` carries the detail (zone, city, and where it came from) rather
+ * than the label, so raw coordinates never become the headline.
+ */
+export function VenueLocationBadge({
+  state,
+  detail,
+  className,
+}: {
+  state: VenueLocationState
+  detail?: string
+  className?: string
+}) {
+  return (
+    <Badge
+      variant="outline"
+      title={detail}
+      className={cn("gap-0 font-medium", VENUE_LOCATION_STYLES[state], className)}
+    >
+      <span className={cn(DOT, VENUE_LOCATION_DOT[state])} />
+      {VENUE_LOCATION_LABELS[state]}
+    </Badge>
+  )
+}

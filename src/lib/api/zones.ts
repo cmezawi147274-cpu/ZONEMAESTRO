@@ -5,7 +5,7 @@ import { store } from "@/lib/mock/store"
 import { commandsApi } from "@/lib/api/commands"
 import { getTenantScope } from "@/lib/auth/session"
 import type { CommandSource } from "@/lib/constants"
-import type { Zone } from "@/lib/api/types"
+import type { Playlist, Zone, ZoneEqualizerSettings } from "@/lib/api/types"
 
 export const zonesApi = {
   async list(filters?: { serverId?: string; locationId?: string }): Promise<Zone[]> {
@@ -75,6 +75,36 @@ export const zonesApi = {
     return apiClient.post<Zone>(`/zones/${id}/playlist`, { playlistId })
   },
 
+  /** Playlists actually assigned to this zone — a PlaylistAssignment
+   * (targetType ZONE) targeting it, or its own currentPlaylistId. Never
+   * the whole library; see src/components/zones/zone-card.tsx, which uses
+   * this instead of usePlaylists() for its picker. */
+  async playlists(id: string): Promise<Playlist[]> {
+    if (isMockMode) {
+      await delay(150)
+      const zone = store.zones.find((z) => z.id === id)
+      if (!zone || !zone.currentPlaylistId) return []
+      // The mock store has no PlaylistAssignment table of its own — the
+      // real backend's richer union (assignment rows + currentPlaylistId)
+      // collapses to "whatever this zone is currently playing" here.
+      const playlist = store.playlists.find((p) => p.id === zone.currentPlaylistId)
+      return playlist ? [{ ...playlist }] : []
+    }
+    return apiClient.get<Playlist[]>(`/zones/${id}/playlists`)
+  },
+
+  /** Removes this zone from the cloud. If it has ever synced from a
+   * Windows Music Server (localZoneId set), the backend also queues the
+   * deletion to that server — see backend/src/routes/zones.ts. */
+  async remove(id: string): Promise<void> {
+    if (isMockMode) {
+      await delay(300)
+      store.zones = store.zones.filter((z) => z.id !== id)
+      return
+    }
+    await apiClient.delete(`/zones/${id}`)
+  },
+
   /**
    * Removes a track from this zone's *view* of its current playlist only.
    * The shared Playlist record is never touched, so every other zone or
@@ -135,4 +165,9 @@ export const zonesApi = {
     commandsApi.send({ serverId, zoneId, type: "MUTE", issuedBy, source }),
   unmute: (zoneId: string, serverId: string, issuedBy: string, source?: CommandSource) =>
     commandsApi.send({ serverId, zoneId, type: "UNMUTE", issuedBy, source }),
+  /** Same path as setVolume above — a real command to that zone's Music
+   * Server, not a cloud-only write. See agent-bridge/lib/local-api.js
+   * `setEqualizer` for where it's actually applied. */
+  setEqualizer: (zoneId: string, serverId: string, equalizer: ZoneEqualizerSettings, issuedBy: string, source?: CommandSource) =>
+    commandsApi.send({ serverId, zoneId, type: "SET_EQ", payload: equalizer as unknown as Record<string, unknown>, issuedBy, source }),
 }

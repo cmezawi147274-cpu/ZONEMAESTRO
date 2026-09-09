@@ -6,6 +6,23 @@ import { can } from "../lib/rbac.js"
 import { forbidden } from "../lib/http-error.js"
 type DayOfWeek = "MON" | "TUE" | "WED" | "THU" | "FRI" | "SAT" | "SUN"
 
+/**
+ * A schedule slot names a playlist for a zone independent of whatever that
+ * zone's `currentPlaylistId` happens to be right now — so without this, a
+ * newly-scheduled playlist would never show up in the zone's own "assign
+ * playlist" picker (that picker only lists PlaylistAssignment rows +
+ * currentPlaylistId, per zones.ts GET /zones/:id/playlists). This creates
+ * that assignment row if one doesn't already exist. It deliberately never
+ * touches currentPlaylistId/live playback itself — creating a slot for
+ * this afternoon must not interrupt whatever is playing right now.
+ */
+async function ensureZonePlaylistAssignment(zoneId: string, playlistId: string) {
+  const existing = await prisma.playlistAssignment.findFirst({ where: { targetType: "ZONE", targetId: zoneId, playlistId } })
+  if (!existing) {
+    await prisma.playlistAssignment.create({ data: { targetType: "ZONE", targetId: zoneId, playlistId } })
+  }
+}
+
 export default async function schedulesRoutes(app: FastifyInstance) {
   app.addHook("preHandler", requireAuth)
 
@@ -29,6 +46,7 @@ export default async function schedulesRoutes(app: FastifyInstance) {
       const user = requireUser(request)
       if (!can(user.role, "schedule:write")) throw forbidden()
       const schedule = await prisma.schedule.create({ data: request.body })
+      await ensureZonePlaylistAssignment(schedule.zoneId, schedule.playlistId)
       return reply.status(201).send(toSchedule(schedule))
     }
   )
@@ -39,6 +57,7 @@ export default async function schedulesRoutes(app: FastifyInstance) {
       const user = requireUser(request)
       if (!can(user.role, "schedule:write")) throw forbidden()
       const schedule = await prisma.schedule.update({ where: { id: request.params.id }, data: request.body })
+      if (request.body.playlistId) await ensureZonePlaylistAssignment(schedule.zoneId, schedule.playlistId)
       return reply.send(toSchedule(schedule))
     }
   )

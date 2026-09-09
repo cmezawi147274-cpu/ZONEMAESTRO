@@ -11,7 +11,11 @@ import { env } from "../lib/env.js"
 import type { CommandType, CommandSource } from "@prisma/client"
 import type { Prisma } from "@prisma/client"
 
-const ZONE_TRANSPORT_TYPES = new Set<CommandType>(["PLAY", "PAUSE", "STOP", "NEXT", "PREVIOUS", "SET_VOLUME", "MUTE", "UNMUTE"])
+// Exported so routes/agent.ts can tell a server-level command (Forget,
+// Restart Playback, Sync, Auto Boot) apart from routine zone transport when
+// deciding whether a FAILED ack is worth a persistent Alert — see the
+// POST /server/commands/ack handler there.
+export const ZONE_TRANSPORT_TYPES = new Set<CommandType>(["PLAY", "PAUSE", "STOP", "NEXT", "PREVIOUS", "SET_VOLUME", "MUTE", "UNMUTE", "SET_EQ"])
 
 /** Servers this caller may address: their own venue (VIEWER), otherwise
  * their organization. Super admins are unrestricted (null = no filter). */
@@ -61,8 +65,15 @@ export default async function commandsRoutes(app: FastifyInstance) {
       const { serverId, zoneId, type, payload } = request.body
       // Transport is the only thing a playback-only role may issue; every
       // other command type (sync, restart, reboot) needs server:command.
+      // FORGET_SERVER is the exception in the other direction: it shuts the
+      // venue player down and wipes its pairing, so it takes the same
+      // SUPER_ADMIN-only permission the portal's "Forget Server" button is
+      // gated on. Without this, any role holding server:command could reach
+      // it through the generic Send Command dialog.
       if (ZONE_TRANSPORT_TYPES.has(type)) {
         if (!can(user.role, "zone:control")) throw forbidden()
+      } else if (type === "FORGET_SERVER") {
+        if (!can(user.role, "server:forget")) throw forbidden()
       } else if (!can(user.role, "server:command")) {
         throw forbidden()
       }
@@ -179,6 +190,13 @@ export default async function commandsRoutes(app: FastifyInstance) {
           issuedById: user.id,
         },
       })
+      // Nudge a connected agent the same way zone transport does, so a
+      // server-level action (restart, auto boot, forget, sync) isn't stuck
+      // PENDING until the agent's next poll. Delivery still rests on that
+      // poll — this only shaves latency, and no ack is awaited here.
+      pushToAgent(serverId, "ReceiveCommand", [
+        { commandId: command.id, type, zoneId: null, payload: payload ?? null, sequence: null },
+      ])
       return reply.status(201).send(toRemoteCommand(command, await displayNameFor(user.id)))
     }
   )

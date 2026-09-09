@@ -3,8 +3,11 @@ import { prisma } from "../lib/db.js"
 import { toMusicServer, toLogEntry } from "../lib/serialize.js"
 import { requireAuth, requireUser, tenantScope } from "../lib/auth-context.js"
 import { can } from "../lib/rbac.js"
-import { forbidden, notFound } from "../lib/http-error.js"
+import { forbidden, notFound, badRequest } from "../lib/http-error.js"
 import { generatePairingCode, hashPairingCode, pairingExpiry } from "../lib/pairing.js"
+import { isAgentConnected, pushToAgent, waitForAck, forgetAgent } from "../lib/agent-registry.js"
+import { pushActivity } from "../lib/activity.js"
+import { env } from "../lib/env.js"
 
 async function withExtras(server: { id: string }) {
   const [zoneCount, pendingSyncJobs] = await Promise.all([
@@ -97,6 +100,92 @@ export default async function serversRoutes(app: FastifyInstance) {
     if (!can(user.role, "server:write")) throw forbidden()
     await prisma.musicServer.delete({ where: { id: request.params.id } })
     return reply.status(204).send()
+  })
+
+  // --------------------------------------------------------------------
+  // "Forget Server" — SUPER_ADMIN only, and deliberately *not* the same
+  // thing as DELETE /servers/:id above (which is a cloud-side unpair and
+  // leaves the Windows machine running). This shuts the venue player down,
+  // wipes its local pairing/cache, and only then removes the cloud row.
+  //
+  // The row is never deleted optimistically. Two paths, both ending in a
+  // deleted row *or* an untouched one — never a half-forgotten server:
+  //   A) agent reachable -> queue FORGET_SERVER, wait for its ack. SUCCESS
+  //      deletes the row; a timeout or FAILED leaves everything in place so
+  //      the operator can retry against a machine that is still running.
+  //   B) agent offline, or never paired -> nothing to reach, so skip the
+  //      wait and delete the row, reporting that the Windows box was not
+  //      contacted and may still have a player process running.
+  // --------------------------------------------------------------------
+  app.post<{ Params: { id: string } }>("/servers/:id/forget", async (request, reply) => {
+    const user = requireUser(request)
+    if (!can(user.role, "server:forget")) throw forbidden()
+    const server = await prisma.musicServer.findUnique({ where: { id: request.params.id } })
+    if (!server) throw notFound("Server")
+
+    const paired = Boolean(server.agentTokenHash)
+    const reachable = paired && isAgentConnected(server.id)
+
+    if (reachable) {
+      const command = await prisma.remoteCommand.create({
+        data: {
+          serverId: server.id,
+          type: "FORGET_SERVER",
+          status: "PENDING",
+          source: user.role === "SUPER_ADMIN" ? "SUPER_ADMIN" : "USER",
+          issuedById: user.id,
+        },
+      })
+      // Same delivery contract as every other server-level command: the push
+      // only shaves latency, the agent's own poll of
+      // GET /api/server/commands/pending stays authoritative.
+      pushToAgent(server.id, "ReceiveCommand", [
+        { commandId: command.id, type: "FORGET_SERVER", zoneId: null, payload: null, sequence: null },
+      ])
+
+      const ack = await waitForAck(command.id, env.agentForgetAckTimeoutMs)
+      if (!ack || ack.status !== "SUCCESS") {
+        // Leave the row (and the command's own audit trail) exactly as they
+        // are — the machine may still be playing, and a deleted row would
+        // strand it with no way to reach it again.
+        if (!ack) {
+          await prisma.remoteCommand.update({
+            where: { id: command.id },
+            data: {
+              status: "TIMEOUT",
+              completedAt: new Date(),
+              resultMessage: `No response from ${server.name} within ${env.agentForgetAckTimeoutMs}ms.`,
+            },
+          })
+        }
+        throw badRequest(
+          ack?.resultMessage ??
+            `${server.name} did not confirm the shutdown within ${Math.round(env.agentForgetAckTimeoutMs / 1000)}s — nothing was removed. Check the machine and try again.`
+        )
+      }
+    }
+
+    // Cascades to zones, commands, logs and sync state; alerts fall back to
+    // a null serverId — exactly what DELETE /servers/:id already relies on.
+    await prisma.musicServer.delete({ where: { id: server.id } })
+    forgetAgent(server.id)
+    await pushActivity({
+      type: "SERVER_DISCONNECTED",
+      message: reachable
+        ? `${server.name} was forgotten by ${user.email} — the venue player was shut down and its pairing wiped.`
+        : `${server.name} was forgotten by ${user.email} — removed from the portal without reaching the Windows machine.`,
+      serverId: null,
+    })
+
+    return reply.send({
+      deleted: true,
+      agentReached: reachable,
+      message: reachable
+        ? `${server.name} was shut down, wiped and removed from the portal.`
+        : paired
+          ? `${server.name} was removed from the portal, but it is offline — the Windows machine could not be reached, so a player process may still be running there.`
+          : `${server.name} was removed from the portal. It had never been paired, so there was nothing to shut down.`,
+    })
   })
 
   app.get<{ Params: { id: string }; Querystring: { limit?: string } }>("/servers/:id/logs", async (request, reply) => {

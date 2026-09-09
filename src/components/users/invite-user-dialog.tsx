@@ -28,24 +28,37 @@ import { ROLES, ROLE_LABELS, type Role } from "@/lib/constants"
  * organization — not a picker — decides the tenant. */
 const LOCATION_BOUND: Role[] = ["VIEWER", "LOCATION_MANAGER"]
 
-const schema = z
-  .object({
-    name: z.string().min(2, "Name is required"),
-    email: z.string().email("Enter a valid email"),
-    role: z.enum(ROLES),
-    organizationId: z.string().nullable(),
-    locationId: z.string().nullable(),
-  })
-  .refine((v) => !LOCATION_BOUND.includes(v.role) || !!v.locationId, {
-    message: "Select a location",
-    path: ["locationId"],
-  })
-  .refine((v) => v.role === "SUPER_ADMIN" || LOCATION_BOUND.includes(v.role) || !!v.organizationId, {
-    message: "Select an organization",
-    path: ["organizationId"],
-  })
+/** Mirrors the backend rule in backend/src/routes/users.ts. */
+const MIN_PASSWORD_LENGTH = 8
 
-type FormValues = z.infer<typeof schema>
+/** A Super Admin sets the new account's password here, so it can sign in
+ * straight away; every other actor keeps the invite-without-password flow,
+ * where the backend sets a random temp password instead. */
+function buildSchema(actorIsSuperAdmin: boolean) {
+  return z
+    .object({
+      name: z.string().min(2, "Name is required"),
+      email: z.string().email("Enter a valid email"),
+      role: z.enum(ROLES),
+      organizationId: z.string().nullable(),
+      locationId: z.string().nullable(),
+      password: z.string(),
+    })
+    .refine((v) => !LOCATION_BOUND.includes(v.role) || !!v.locationId, {
+      message: "Select a location",
+      path: ["locationId"],
+    })
+    .refine((v) => v.role === "SUPER_ADMIN" || LOCATION_BOUND.includes(v.role) || !!v.organizationId, {
+      message: "Select an organization",
+      path: ["organizationId"],
+    })
+    .refine((v) => !actorIsSuperAdmin || v.password.length >= MIN_PASSWORD_LENGTH, {
+      message: `Password must be at least ${MIN_PASSWORD_LENGTH} characters`,
+      path: ["password"],
+    })
+}
+
+type FormValues = z.infer<ReturnType<typeof buildSchema>>
 
 export function InviteUserDialog() {
   const [open, setOpen] = useState(false)
@@ -57,14 +70,17 @@ export function InviteUserDialog() {
   const lockedOrganizationId = actorRole === "SUPER_ADMIN" ? null : user?.organizationId ?? null
   const lockedLocationId = actorRole === "LOCATION_MANAGER" ? user?.locationId ?? null : null
 
+  const actorIsSuperAdmin = actorRole === "SUPER_ADMIN"
+
   const form = useForm<FormValues>({
-    resolver: zodResolver(schema),
+    resolver: zodResolver(buildSchema(actorIsSuperAdmin)),
     defaultValues: {
       name: "",
       email: "",
       role: "VIEWER",
       organizationId: lockedOrganizationId,
       locationId: lockedLocationId,
+      password: "",
     },
   })
 
@@ -105,6 +121,9 @@ export function InviteUserDialog() {
       // location-bound roles; send nothing that could contradict it.
       organizationId: values.role === "SUPER_ADMIN" || LOCATION_BOUND.includes(values.role) ? null : values.organizationId,
       locationId: values.role === "SUPER_ADMIN" ? null : values.locationId,
+      // Only a Super Admin sets credentials; anyone else invites without one
+      // and the backend assigns a random temp password.
+      password: actorIsSuperAdmin ? values.password : undefined,
     })
     form.reset({
       name: "",
@@ -112,6 +131,7 @@ export function InviteUserDialog() {
       role: "VIEWER",
       organizationId: lockedOrganizationId,
       locationId: lockedLocationId,
+      password: "",
     })
     setOpen(false)
   }
@@ -158,6 +178,21 @@ export function InviteUserDialog() {
                 </FormItem>
               )}
             />
+            {actorIsSuperAdmin && (
+              <FormField
+                control={form.control}
+                name="password"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Password</FormLabel>
+                    <FormControl>
+                      <Input type="password" autoComplete="new-password" placeholder="At least 8 characters" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
             <FormField
               control={form.control}
               name="role"

@@ -10,8 +10,6 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: path.resolve(__dirname),
   },
-  // Headless Chrome and some tools hit 127.0.0.1 instead of localhost.
-  allowedDevOrigins: ["127.0.0.1", "localhost"],
   // Produces a self-contained server bundle (node_modules pruned to only
   // what's needed at runtime) — see Dockerfile.
   output: "standalone",

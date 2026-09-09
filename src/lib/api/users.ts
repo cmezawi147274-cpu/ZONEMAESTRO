@@ -12,6 +12,10 @@ export interface InviteUserInput {
   role: Role
   organizationId: string | null
   locationId: string | null
+  /** Only sent when a Super Admin is creating the account with credentials
+   * the new user can sign in with immediately. Never stored on the User
+   * record and never returned by the API. */
+  password?: string
 }
 
 export const usersApi = {
@@ -26,8 +30,16 @@ export const usersApi = {
   async invite(input: InviteUserInput): Promise<User> {
     if (isMockMode) {
       await delay(400)
-      const user: User = { id: nextId("usr"), createdAt: new Date().toISOString(), lastLoginAt: null, ...input }
+      // Split the credential off the profile: it must never end up on the
+      // User record (which `list()` hands straight to the UI).
+      const { password, ...profile } = input
+      const email = profile.email.trim().toLowerCase()
+      if (store.users.some((u) => u.email.trim().toLowerCase() === email)) {
+        throw new Error("A user with that email already exists.")
+      }
+      const user: User = { id: nextId("usr"), createdAt: new Date().toISOString(), lastLoginAt: null, ...profile }
       store.users.push(user)
+      if (password) store.userPasswords[email] = password
       return user
     }
     return apiClient.post<User>("/users/invite", input)

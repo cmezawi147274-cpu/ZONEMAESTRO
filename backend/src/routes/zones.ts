@@ -1,10 +1,12 @@
 import type { FastifyInstance } from "fastify"
 import { prisma } from "../lib/db.js"
-import { toZone } from "../lib/serialize.js"
+import { toZone, toPlaylist } from "../lib/serialize.js"
 import { requireAuth, requireUser, tenantScope, type TenantScope } from "../lib/auth-context.js"
 import { can } from "../lib/rbac.js"
 import { forbidden, notFound, badRequest } from "../lib/http-error.js"
 import { queuePlaylistTracksForServer } from "../lib/zone-effects.js"
+import { pushToAgent } from "../lib/agent-registry.js"
+import { pushActivity } from "../lib/activity.js"
 
 async function allowedLocationIds(organizationId: string) {
   const locs = await prisma.location.findMany({ where: { organizationId }, select: { id: true } })
@@ -60,6 +62,31 @@ export default async function zonesRoutes(app: FastifyInstance) {
     return reply.send(toZone(zone))
   })
 
+  // --------------------------------------------------------------------
+  // Playlists "assigned" to this zone (Task 2 — a picker must never dump
+  // the whole library). That's the union of: playlists explicitly
+  // assigned to this zone (PlaylistAssignment, targetType ZONE) and the
+  // zone's own currentPlaylistId — a zone assigned the old way, straight
+  // through POST /zones/:id/playlist, never gets an assignment row at all.
+  // --------------------------------------------------------------------
+  app.get<{ Params: { id: string } }>("/zones/:id/playlists", async (request, reply) => {
+    const user = requireUser(request)
+    if (!can(user.role, "zone:read")) throw forbidden()
+    const zone = await scopedZone(tenantScope(request), request.params.id)
+    const assignments = await prisma.playlistAssignment.findMany({ where: { targetType: "ZONE", targetId: zone.id } })
+    const ids = new Set(assignments.map((a) => a.playlistId))
+    if (zone.currentPlaylistId) ids.add(zone.currentPlaylistId)
+    if (ids.size === 0) return reply.send([])
+    const playlists = await prisma.playlist.findMany({ where: { id: { in: Array.from(ids) } }, orderBy: { name: "asc" } })
+    const items = await Promise.all(
+      playlists.map(async (p) => {
+        const tracks = await prisma.playlistTrack.findMany({ where: { playlistId: p.id }, orderBy: { position: "asc" } })
+        return toPlaylist(p, tracks.map((t) => t.trackId))
+      })
+    )
+    return reply.send(items)
+  })
+
   app.patch<{ Params: { id: string }; Body: { prayerModeEnabled?: boolean } }>("/zones/:id", async (request, reply) => {
     const user = requireUser(request)
     if (!can(user.role, "prayer:read")) throw forbidden()
@@ -93,6 +120,12 @@ export default async function zonesRoutes(app: FastifyInstance) {
     return reply.send(toZone(updated))
   })
 
+  // Per-zone equalizer no longer has a REST route of its own — it rides
+  // the same real command path SET_VOLUME does (POST /commands, type
+  // SET_EQ), so it actually reaches that zone's Music Server, not just
+  // this database. See routes/commands.ts ZONE_TRANSPORT_TYPES and
+  // lib/zone-effects.ts applyZoneCommandEffect's "SET_EQ" case.
+
   app.post<{ Params: { id: string; trackId: string } }>("/zones/:id/tracks/:trackId/remove", async (request, reply) => {
     const user = requireUser(request)
     if (!can(user.role, "zone:assign")) throw forbidden()
@@ -118,5 +151,47 @@ export default async function zonesRoutes(app: FastifyInstance) {
     const excludedTrackIds = zone.excludedTrackIds.filter((id) => id !== request.params.trackId)
     const updated = await prisma.zone.update({ where: { id: zone.id }, data: { excludedTrackIds } })
     return reply.send(toZone(updated))
+  })
+
+  // --------------------------------------------------------------------
+  // Cloud -> local zone delete (Task 1). Same pattern as DELETE
+  // /servers/:id: the cloud row is removed immediately (no ack wait — this
+  // is not "Forget Server", nothing shuts down). If the zone has ever
+  // reported a localZoneId, a SYNC_CONFIG command carries the deletion to
+  // the Windows agent rather than adding a new CommandType — see
+  // agent-bridge/lib/agent.js SERVER_HANDLERS.SYNC_CONFIG.
+  // --------------------------------------------------------------------
+  app.delete<{ Params: { id: string } }>("/zones/:id", async (request, reply) => {
+    const user = requireUser(request)
+    if (!can(user.role, "zone:assign")) throw forbidden()
+    const zone = await scopedZone(tenantScope(request), request.params.id)
+    await prisma.zone.delete({ where: { id: zone.id } })
+
+    if (zone.localZoneId) {
+      const command = await prisma.remoteCommand.create({
+        data: {
+          serverId: zone.serverId,
+          type: "SYNC_CONFIG",
+          payload: { deleteLocalZoneId: zone.localZoneId },
+          status: "PENDING",
+          source: user.role === "SUPER_ADMIN" ? "SUPER_ADMIN" : "USER",
+          issuedById: user.id,
+        },
+      })
+      // Nudge a connected agent the same way every other server-level
+      // command does; the next commands/pending poll picks it up regardless.
+      pushToAgent(zone.serverId, "ReceiveCommand", [
+        { commandId: command.id, type: "SYNC_CONFIG", zoneId: null, payload: command.payload, sequence: null },
+      ])
+    }
+
+    await pushActivity({
+      type: "ZONE_STATUS_CHANGED",
+      message: `${zone.name} was deleted by ${user.email}${zone.localZoneId ? " — the Windows Music Server will remove it on its next sync." : "."}`,
+      serverId: zone.serverId,
+      zoneId: zone.id,
+    })
+
+    return reply.status(204).send()
   })
 }

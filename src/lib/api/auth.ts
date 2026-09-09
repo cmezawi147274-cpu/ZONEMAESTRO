@@ -30,8 +30,14 @@ export const authApi = {
   async login(input: LoginInput): Promise<Session> {
     if (isMockMode) {
       await delay(500)
-      const user = store.users.find((u) => u.email.toLowerCase() === input.email.trim().toLowerCase())
-      if (!user || input.password !== DEMO_PASSWORD) {
+      const email = input.email.trim().toLowerCase()
+      const user = store.users.find((u) => u.email.toLowerCase() === email)
+      // Seeded demo users keep signing in with DEMO_PASSWORD; an account a
+      // Super Admin created in this session signs in with the password they
+      // chose for it (see MockStore.userPasswords).
+      const assigned = store.userPasswords[email]
+      const passwordMatches = input.password === DEMO_PASSWORD || (!!assigned && input.password === assigned)
+      if (!user || !passwordMatches) {
         throw new Error("Invalid email or password.")
       }
       user.lastLoginAt = new Date().toISOString()

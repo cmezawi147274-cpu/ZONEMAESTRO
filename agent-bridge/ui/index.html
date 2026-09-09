@@ -90,18 +90,17 @@
   <!-- ------------------------------------------------------------------ -->
   <div id="panel-setup" class="panel">
     <div class="card">
-      <h2>Connect this Music Server to the cloud</h2>
+      <h2>Pair this server with the CMMP cloud</h2>
       <p class="muted" style="margin-top:0">
-        In the cloud portal, open <strong>Music Servers</strong>, pick this venue's server and
-        copy the <strong>pairing code</strong> it shows. Paste it below and press Connect.
-        The code works once and expires, so generate a fresh one if it is refused.
+        In the cloud portal, open <strong>Location → Register Server</strong>, copy the pairing
+        code it shows, and paste it here. The code is short-lived and single-use.
       </p>
       <div id="pairForm">
         <div class="label">Cloud API URL</div>
         <input id="cmmpUrl" placeholder="https://api.your-domain.com/api">
         <div class="label">Pairing code</div>
         <input id="pairCode" placeholder="XXXX-XXXX" autocomplete="off" spellcheck="false">
-        <button class="primary" id="btnPair">Connect</button>
+        <button class="primary" id="btnPair">Pair with cloud</button>
       </div>
       <div id="pairedInfo" style="display:none">
         <dl class="kv">
@@ -195,17 +194,8 @@
   });
 
   // ---------------------------------------------------------------- status
-  // On the very first load only: an agent that has never been paired opens
-  // on the pairing screen rather than an empty Zones tab, so the one thing
-  // an operator must do is the thing in front of them.
-  let firstStatusLoad = true;
-
   async function loadStatus() {
     const s = await api('/api/status');
-    if (firstStatusLoad) {
-      firstStatusLoad = false;
-      if (!s.paired) document.querySelector('.tab[data-panel="setup"]').click();
-    }
 
     // One combined health badge (the local playback service — the thing
     // that actually makes sound) plus a subtitle for playback-host and

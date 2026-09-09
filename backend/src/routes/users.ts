@@ -21,7 +21,15 @@ interface UserBody {
   role: Role
   organizationId: string | null
   locationId: string | null
+  /** Set by a SUPER_ADMIN creating an account that must be able to sign in
+   * immediately. Never echoed back — `toUser` carries no credential
+   * fields. Absent for every other actor, who keep the invite-only flow. */
+  password?: string
 }
+
+/** Matches the client-side rule in
+ * src/components/users/invite-user-dialog.tsx. */
+const MIN_PASSWORD_LENGTH = 8
 
 /** Which existing users this caller is allowed to see or act on. */
 function visibilityWhere(actor: AuthUser) {
@@ -94,10 +102,22 @@ export default async function usersRoutes(app: FastifyInstance) {
     const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } })
     if (existing) throw badRequest("A user with that email already exists.")
 
-    // No email delivery in this session — a random temp password is set so
-    // the record exists; a real invite flow would email a reset link.
-    const tempPassword = crypto.randomBytes(12).toString("hex")
-    const passwordHash = await bcrypt.hash(tempPassword, 10)
+    // A SUPER_ADMIN sets the credential directly, so the account can sign in
+    // the moment it exists. Every other actor keeps the invite-only flow: a
+    // random temp password nobody is told, standing in for the reset link a
+    // real invite would email. A password sent by a non-SUPER_ADMIN is
+    // ignored rather than honored — it must not become a way to mint a
+    // login for someone else's account.
+    const requestedPassword = typeof request.body?.password === "string" ? request.body.password : undefined
+    let passwordHash: string
+    if (actor.role === "SUPER_ADMIN") {
+      if (!requestedPassword || requestedPassword.length < MIN_PASSWORD_LENGTH) {
+        throw badRequest(`A password of at least ${MIN_PASSWORD_LENGTH} characters is required.`)
+      }
+      passwordHash = await bcrypt.hash(requestedPassword, 10)
+    } else {
+      passwordHash = await bcrypt.hash(crypto.randomBytes(12).toString("hex"), 10)
+    }
     const created = await prisma.user.create({
       data: { name, email: normalizedEmail, role, ...scope, passwordHash },
     })

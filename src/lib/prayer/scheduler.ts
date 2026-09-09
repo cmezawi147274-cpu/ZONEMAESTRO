@@ -6,6 +6,7 @@ import type { PrayerConfig, PrayerTimesToday } from "@/lib/api/types"
 import { readEffectivePrayerConfig, subscribePrayerConfig } from "@/lib/prayer/config-store"
 import { cacheKey, getCachedTimings, getMostRecentTimings, setCachedTimings } from "@/lib/prayer/cache"
 import { fetchPrayerTimings } from "@/lib/prayer/aladhan"
+import { prayerApi } from "@/lib/api/prayer"
 import { addDays, calendarDateKey, todayInTimeZone, zonedTimeToUtc, type CalendarDate } from "@/lib/prayer/timezone-math"
 import { mockBus } from "@/lib/realtime/bus"
 import { store } from "@/lib/mock/store"
@@ -140,6 +141,16 @@ class PrayerScheduler {
   private async getTimingsForDate(date: CalendarDate): Promise<PrayerTimesToday | null> {
     const location = this.config.location!
     const key = cacheKey(calendarDateKey(date), location.latitude, location.longitude, this.config.calculationMethodId)
+
+    // Real deployment: the cloud calculates, this browser only displays.
+    // Zones are paused by backend/src/lib/prayer-scheduler.ts, so what is
+    // shown here has to come from the same endpoint that drives it rather
+    // than a second, independently-fetched schedule.
+    if (!isMockMode) {
+      const result = await prayerApi.getTodayTimes(location, this.config.calculationMethodId)
+      if (result) setCachedTimings(key, result.times)
+      return result?.times ?? getCachedTimings(key) ?? getMostRecentTimings()?.timings ?? null
+    }
 
     const cached = getCachedTimings(key)
     if (cached) {

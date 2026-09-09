@@ -29,11 +29,15 @@ export type Permission =
   | "prayer:read"
   | "prayer:manage"
   | "zone:override"
+  /** "Forget Server" — shut down the venue player, wipe its local pairing
+   * and cache, and delete the cloud row. Strictly more destructive than
+   * "server:write" (cloud unpair only), so SUPER_ADMIN only. */
+  | "server:forget"
 
 const MATRIX: Record<Role, Permission[]> = {
   SUPER_ADMIN: [
     "org:read", "org:write", "location:read", "location:write", "server:read", "server:write",
-    "server:pair", "server:command", "zone:read", "zone:control", "zone:assign", "zone:override", "music:read",
+    "server:pair", "server:command", "server:forget", "zone:read", "zone:control", "zone:assign", "zone:override", "music:read",
     "music:upload", "music:delete", "playlist:read", "playlist:write", "schedule:read", "schedule:write",
     "sync:trigger", "users:manage", "logs:read", "prayer:read", "prayer:manage",
   ],

@@ -72,7 +72,7 @@ export function CreatePlaylistDialog() {
           </Button>
         }
       />
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-md">
         <DialogHeader>
           <DialogTitle>New Playlist</DialogTitle>
           <DialogDescription>Create a playlist you can assign to organizations, locations, servers or zones.</DialogDescription>
@@ -140,7 +140,7 @@ export function CreatePlaylistDialog() {
 
             <div className="space-y-1.5">
               <FormLabel>Tracks (optional)</FormLabel>
-              <TrackPicker selected={trackIds} onChange={setTrackIds} />
+              <TrackPicker compact selected={trackIds} onChange={setTrackIds} />
             </div>
 
             <DialogFooter>

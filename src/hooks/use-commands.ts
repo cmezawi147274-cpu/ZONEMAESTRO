@@ -25,6 +25,7 @@ export function useSendCommand() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["commands"] })
       qc.invalidateQueries({ queryKey: ["zones"] })
+      qc.invalidateQueries({ queryKey: ["servers"] })
       toast.success("Command sent")
     },
     onError: (e: Error) => toast.error(e.message),

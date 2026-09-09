@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { Share2, Loader2 } from "lucide-react"
+import { Share2, Loader2, ChevronLeft } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -18,43 +18,95 @@ import { useLocations } from "@/hooks/use-locations"
 import { useServers } from "@/hooks/use-servers"
 import { useZones } from "@/hooks/use-zones"
 import { useAssignPlaylist } from "@/hooks/use-playlists"
-import type { PlaylistAssignment } from "@/lib/api/types"
 
-const TARGET_TYPES: { value: PlaylistAssignment["targetType"]; label: string }[] = [
-  { value: "ORGANIZATION", label: "Organization" },
-  { value: "LOCATION", label: "Location" },
-  { value: "SERVER", label: "Music Server" },
-  { value: "ZONE", label: "Zone" },
-]
+const STEPS = [
+  { field: "organizationId", label: "Organization", placeholder: "Select organization" },
+  { field: "locationId", label: "Location", placeholder: "Select location" },
+  { field: "serverId", label: "Music Server", placeholder: "Select server" },
+  { field: "zoneId", label: "Zone", placeholder: "Select zone" },
+] as const
 
+type StepField = (typeof STEPS)[number]["field"]
+
+/** Assign Playlist — org -> location -> server -> zone, one Select per
+ * step. A playlist always ends up assigned to a ZONE: the previous
+ * "target type + one target" picker let it land on an org/location/server
+ * as a whole, which no zone-scoped picker (src/components/zones/zone-card.tsx)
+ * could ever resolve back down to an actual playable zone. Each step's
+ * options are filtered from the lists already loaded by the hooks below —
+ * no new queries per step. */
 export function AssignPlaylistDialog({ playlistId }: { playlistId: string }) {
   const [open, setOpen] = useState(false)
-  const [targetType, setTargetType] = useState<PlaylistAssignment["targetType"]>("ZONE")
-  const [targetId, setTargetId] = useState("")
+  const [step, setStep] = useState(0)
+  const [selection, setSelection] = useState<Record<StepField, string>>({
+    organizationId: "",
+    locationId: "",
+    serverId: "",
+    zoneId: "",
+  })
   const { data: organizations } = useOrganizations()
   const { data: locations } = useLocations()
   const { data: servers } = useServers()
   const { data: zones } = useZones()
   const assign = useAssignPlaylist()
 
-  const options =
-    targetType === "ORGANIZATION"
-      ? organizations?.map((o) => ({ id: o.id, label: o.name }))
-      : targetType === "LOCATION"
-        ? locations?.map((l) => ({ id: l.id, label: l.name }))
-        : targetType === "SERVER"
-          ? servers?.map((s) => ({ id: s.id, label: s.name }))
-          : zones?.map((z) => ({ id: z.id, label: z.name }))
+  const optionsForStep = (field: StepField): { id: string; label: string }[] => {
+    switch (field) {
+      case "organizationId":
+        return (organizations ?? []).map((o) => ({ id: o.id, label: o.name }))
+      case "locationId":
+        return (locations ?? [])
+          .filter((l) => l.organizationId === selection.organizationId)
+          .map((l) => ({ id: l.id, label: l.name }))
+      case "serverId":
+        return (servers ?? [])
+          .filter((s) => s.locationId === selection.locationId)
+          .map((s) => ({ id: s.id, label: s.name }))
+      case "zoneId":
+        return (zones ?? [])
+          .filter((z) => z.serverId === selection.serverId)
+          .map((z) => ({ id: z.id, label: z.name }))
+    }
+  }
 
-  async function onConfirm() {
-    if (!targetId) return
-    await assign.mutateAsync({ playlistId, targetType, targetId })
+  const current = STEPS[step]
+  const options = optionsForStep(current.field)
+  const isLastStep = step === STEPS.length - 1
+
+  function reset() {
+    setStep(0)
+    setSelection({ organizationId: "", locationId: "", serverId: "", zoneId: "" })
+  }
+
+  function pick(id: string) {
+    setSelection((prev) => ({ ...prev, [current.field]: id }))
+  }
+
+  function next() {
+    if (!selection[current.field]) return
+    if (isLastStep) return
+    setStep((s) => s + 1)
+  }
+
+  function back() {
+    setStep((s) => Math.max(0, s - 1))
+  }
+
+  async function onAssign() {
+    if (!selection.zoneId) return
+    await assign.mutateAsync({ playlistId, targetType: "ZONE", targetId: selection.zoneId })
     setOpen(false)
-    setTargetId("")
+    reset()
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (!next) reset()
+      }}
+    >
       <DialogTrigger render={
         <Button variant="outline" size="sm">
           <Share2 className="size-4" /> Assign
@@ -63,52 +115,56 @@ export function AssignPlaylistDialog({ playlistId }: { playlistId: string }) {
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Assign Playlist</DialogTitle>
-          <DialogDescription>Choose where this playlist should apply.</DialogDescription>
+          <DialogDescription>
+            Step {step + 1} of {STEPS.length} — {current.label}
+          </DialogDescription>
         </DialogHeader>
-        <div className="space-y-3">
-          <Select
-            value={targetType}
-            onValueChange={(v) => {
-              if (v) {
-                setTargetType(v as PlaylistAssignment["targetType"])
-                setTargetId("")
-              }
-            }}
-            items={Object.fromEntries(TARGET_TYPES.map((t) => [t.value, t.label]))}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {TARGET_TYPES.map((t) => (
-                <SelectItem key={t.value} value={t.value}>
-                  {t.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select
-            value={targetId}
-            onValueChange={(v) => v && setTargetId(v)}
-            items={Object.fromEntries((options ?? []).map((o) => [o.id, o.label]))}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Select target" />
-            </SelectTrigger>
-            <SelectContent>
-              {options?.map((opt) => (
-                <SelectItem key={opt.id} value={opt.id}>
-                  {opt.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+
+        {/* Steps already completed, shown as a breadcrumb so the operator
+            can see (and revisit, via Back) the path taken so far. */}
+        {step > 0 && (
+          <div className="flex flex-wrap gap-1.5 text-xs text-muted-foreground">
+            {STEPS.slice(0, step).map((s) => (
+              <span key={s.field} className="rounded-md border px-2 py-1">
+                {optionsForStep(s.field).find((o) => o.id === selection[s.field])?.label ?? selection[s.field]}
+              </span>
+            ))}
+          </div>
+        )}
+
+        <Select
+          value={selection[current.field] || undefined}
+          onValueChange={(v) => v && pick(v)}
+          items={Object.fromEntries(options.map((o) => [o.id, o.label]))}
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue placeholder={current.placeholder} />
+          </SelectTrigger>
+          <SelectContent>
+            {options.map((opt) => (
+              <SelectItem key={opt.id} value={opt.id}>
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
         <DialogFooter>
-          <Button onClick={onConfirm} disabled={!targetId || assign.isPending}>
-            {assign.isPending && <Loader2 className="size-4 animate-spin" />}
-            Assign
-          </Button>
+          {step > 0 && (
+            <Button variant="outline" onClick={back} disabled={assign.isPending}>
+              <ChevronLeft className="size-4" /> Back
+            </Button>
+          )}
+          {isLastStep ? (
+            <Button onClick={onAssign} disabled={!selection.zoneId || assign.isPending}>
+              {assign.isPending && <Loader2 className="size-4 animate-spin" />}
+              Assign
+            </Button>
+          ) : (
+            <Button onClick={next} disabled={!selection[current.field]}>
+              Next
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -37,6 +37,12 @@ export type Permission =
    * other automatic action, and never waits for local-server confirmation.
    * Restricted to SUPER_ADMIN — see src/hooks/use-zones.ts. */
   | "zone:override"
+  /** "Forget Server": shuts the venue player down, wipes its local pairing
+   * and cache, and deletes the cloud row as if it had never been synced.
+   * Strictly more destructive than "server:write" (which only unpairs), so
+   * it is restricted to SUPER_ADMIN and enforced again server-side in
+   * backend/src/routes/servers.ts and backend/src/routes/commands.ts. */
+  | "server:forget"
 
 const MATRIX: Record<Role, Permission[]> = {
   SUPER_ADMIN: [
@@ -52,6 +58,7 @@ const MATRIX: Record<Role, Permission[]> = {
     "zone:control",
     "zone:assign",
     "zone:override",
+    "server:forget",
     "music:read",
     "music:upload",
     "music:delete",

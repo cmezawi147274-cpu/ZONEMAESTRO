@@ -48,6 +48,47 @@ export function listCitiesForCountry(country: string): GeoLocation[] {
     }))
 }
 
+/** Resolves a saved Location back to full coordinates from its
+ * city/country/timezone.
+ *
+ * The cloud's Location table stores city, country and timezone only — it
+ * has no latitude/longitude columns (backend/prisma/schema.prisma), and
+ * `toLocation()` always serializes both as null. Anything that needs real
+ * coordinates for a Location (prayer times on the Zones page) resolves
+ * them here, from the very same dataset the Country → City picker used to
+ * write that city in the first place.
+ *
+ * Returns null when the city was never picked through that picker — empty
+ * or hand-typed — which is the caller's cue to say so rather than to guess
+ * at a position.
+ */
+export function resolveGeoLocation(
+  location: Pick<GeoLocation, "city" | "country" | "timezone">
+): GeoLocation | null {
+  const city = location.city?.trim().toLowerCase()
+  const country = location.country?.trim().toLowerCase()
+  if (!city || !country) return null
+
+  const matches = VALID.filter((r) => r.country.toLowerCase() === country && r.city.toLowerCase() === city)
+  if (matches.length === 0) return null
+
+  // Several cities in one country can share a name; the saved IANA zone is
+  // the tiebreaker. When it singles out none of them, the most populous
+  // wins — the same one `listCitiesForCountry` lists first, so this agrees
+  // with whatever the picker showed the administrator.
+  const byTimezone = location.timezone ? matches.filter((r) => r.timezone === location.timezone) : []
+  const pick = (byTimezone.length > 0 ? byTimezone : matches).sort((a, b) => (b.pop ?? 0) - (a.pop ?? 0))[0]
+
+  return {
+    country: pick.country,
+    city: pick.city,
+    region: pick.province || "",
+    latitude: pick.lat,
+    longitude: pick.lng,
+    timezone: pick.timezone,
+  }
+}
+
 /** Resolves the GMT offset for an IANA timezone *right now* (so it
  * automatically reflects daylight saving) as e.g. "GMT+4:00". */
 export function formatGmtOffset(timezone: string, at: Date = new Date()): string {

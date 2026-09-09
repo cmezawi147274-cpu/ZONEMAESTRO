@@ -48,7 +48,12 @@ async function pair(code, apiUrl) {
   const normalized = String(code || "").trim().toUpperCase();
   if (!normalized) throw new Error("A pairing code is required.");
   const base = trimSlash(apiUrl || cmmpApiUrl());
-  const previousServerId = getState().serverId || null;
+  // The server id this agent was previously paired to, if any. Sent so
+  // the cloud releases that old row (POST /pairing/complete already
+  // handles it) instead of leaving it behind as a permanently-OFFLINE
+  // duplicate the moment this machine re-pairs. Never affects Forget
+  // Server, which deletes the row cloud-side before this ever runs.
+  const previousServerId = getState().serverId || undefined;
 
   log(`Pairing with CMMP at ${base} using code ${normalized} ...`);
   const result = await request("/pairing/complete", {
@@ -59,9 +64,6 @@ async function pair(code, apiUrl) {
       code: normalized,
       serverVersion: env.agentVersion,
       os: `${os.type()} ${os.release()} (bridge)`,
-      // Lets the cloud release the row this PC was on before, so re-pairing
-      // to a new server row does not leave a permanently-OFFLINE duplicate
-      // behind in the portal.
       ...(previousServerId ? { previousServerId } : {}),
     },
   });
@@ -93,4 +95,5 @@ module.exports = {
   ackCommand: (body) => request("/server/commands/ack", { method: "POST", body }),
   syncTracks: (cachedTrackIds) => request("/server/tracks/sync", { method: "POST", body: { cachedTrackIds } }),
   syncZonePlaylists: () => request("/server/zone-playlists/sync", { method: "POST" }),
+  getSchedules: () => request("/server/schedules"),
 };

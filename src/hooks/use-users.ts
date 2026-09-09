@@ -12,9 +12,11 @@ export function useInviteUser() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (input: InviteUserInput) => usersApi.invite(input),
-    onSuccess: () => {
+    onSuccess: (user, input) => {
       qc.invalidateQueries({ queryKey: ["users"] })
-      toast.success("User invited")
+      // A Super Admin set the credential, so the account works right now —
+      // say that, rather than implying an invite email is on its way.
+      toast.success(input.password ? `${user.name} can sign in now as ${user.email}.` : "User invited")
     },
     onError: (e: Error) => toast.error(e.message),
   })

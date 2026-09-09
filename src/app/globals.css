@@ -7,9 +7,9 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
-  --font-heading: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-geist-mono);
+  --font-heading: var(--font-sans);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -129,94 +129,66 @@
   }
 }
 
-.login-shell {
-  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
-  --login-accent: #5ec8f7;
-  --login-bg: #101215;
-  --login-panel: #16191e;
-  caret-color: #e8eef3;
-}
-
-.login-stage-grid {
-  background-image:
-    linear-gradient(to right, rgb(255 255 255 / 0.03) 1px, transparent 1px),
-    linear-gradient(to bottom, rgb(255 255 255 / 0.03) 1px, transparent 1px);
-  background-size: 56px 56px;
-  mask-image: radial-gradient(ellipse 70% 60% at 28% 42%, black 12%, transparent 72%);
-}
-
-.login-shell ::selection {
-  background: var(--login-accent);
-  color: #0b0d10;
-}
+/* ---------------------------------------------------------------------- *
+ * /login — one enter animation, one error shake, one button press.
+ * Scoped to this route only. Everything gated on prefers-reduced-motion.
+ * ---------------------------------------------------------------------- */
 
 .login-form-enter {
-  animation: login-rise 380ms var(--ease-out) both;
+  animation: login-form-enter 600ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-@keyframes login-rise {
+@keyframes login-form-enter {
   from {
     opacity: 0;
     transform: translateY(8px);
-    filter: blur(4px);
   }
   to {
     opacity: 1;
-    transform: none;
-    filter: none;
-  }
-}
-
-@keyframes login-eq {
-  0%,
-  100% {
-    transform: scaleY(0.28);
-  }
-  50% {
-    transform: scaleY(1);
-  }
-}
-
-.login-eq-bar {
-  transform-origin: bottom;
-  animation: login-eq 1.05s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
-}
-
-@keyframes login-shake {
-  0%,
-  100% {
-    transform: translateX(0);
-  }
-  25% {
-    transform: translateX(-3px);
-  }
-  75% {
-    transform: translateX(3px);
+    transform: translateY(0);
   }
 }
 
 .login-error-shake {
-  animation: login-shake 180ms var(--ease-out);
+  animation: login-error-shake 420ms cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
+@keyframes login-error-shake {
+  10%,
+  90% {
+    transform: translateX(-1px);
+  }
+  20%,
+  80% {
+    transform: translateX(2px);
+  }
+  30%,
+  50%,
+  70% {
+    transform: translateX(-4px);
+  }
+  40%,
+  60% {
+    transform: translateX(4px);
+  }
 }
 
 .login-submit {
-  background-color: #5ec8f7;
-  color: #0b0d10;
-  font-weight: 600;
+  transition: transform 150ms ease;
 }
 
-.login-submit:hover:not(:disabled) {
-  background-color: #7dd3fc;
+.login-submit:active {
+  transform: scale(0.97);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .login-form-enter,
+  .login-form-enter {
+    animation: none;
+  }
   .login-error-shake {
     animation: none;
   }
-
-  .login-eq-bar {
-    animation: none;
-    transform: scaleY(0.55);
+  .login-submit:active {
+    transform: none;
   }
 }

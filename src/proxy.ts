@@ -64,5 +64,8 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
+  // "branding" added alongside favicon.ico: the login page's own logo
+  // (public/branding/*) has to be reachable by a signed-out browser, or
+  // the <img>/<Image> request for it gets redirected to /login itself.
+  matcher: ["/((?!api|_next/static|_next/image|favicon.ico|branding/).*)"],
 }
