@@ -117,6 +117,7 @@ export function EqualizerCurve({
               fill="none"
               stroke={enabled ? "#5ec8f7" : "rgba(255,255,255,0.25)"}
               strokeWidth={1.25}
+              strokeLinejoin="round"
               vectorEffect="non-scaling-stroke"
             />
           </svg>
