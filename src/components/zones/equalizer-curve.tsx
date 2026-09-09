@@ -16,20 +16,19 @@ function xFor(index: number): number {
   return (index / (EQ_BANDS.length - 1)) * 100
 }
 
-/** A light Catmull-Rom -> quadratic smoothing: each segment's control point
- * is the previous point, so the line eases through each node instead of
- * kinking — enough to read as "a smooth curve" without a spline library. */
-function smoothPath(points: { x: number; y: number }[]): string {
+/** Straight connect-the-dots segments — the same shape every real graphic
+ * EQ display uses (FabFilter, iZotope, the classic Winamp EQ), and the
+ * only shape guaranteed to actually touch each band's dot exactly rather
+ * than ease past it. The previous version (Catmull-Rom-style quadratic
+ * smoothing through midpoints) *did* pass through every point too, but the
+ * curved segments between them could visibly overshoot past a point on a
+ * sharp swing between neighbors — e.g. a deep trough right next to a tall
+ * peak, like -12 dB at 1k next to +12 dB at 2k — reading as "the line
+ * doesn't match the dots" even though the endpoints were technically
+ * correct. */
+function linePath(points: { x: number; y: number }[]): string {
   if (points.length === 0) return ""
-  let d = `M ${points[0].x} ${points[0].y}`
-  for (let i = 1; i < points.length; i++) {
-    const prev = points[i - 1]
-    const curr = points[i]
-    const midX = (prev.x + curr.x) / 2
-    d += ` Q ${prev.x} ${prev.y}, ${midX} ${(prev.y + curr.y) / 2}`
-    d += ` T ${curr.x} ${curr.y}`
-  }
-  return d
+  return points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ")
 }
 
 export function EqualizerCurve({
@@ -44,7 +43,7 @@ export function EqualizerCurve({
   onBandChange: (index: number, value: number) => void
 }) {
   const points = EQ_BANDS.map((_, i) => ({ x: xFor(i), y: yFor(bands[i] ?? 0) }))
-  const curveD = smoothPath(points)
+  const curveD = linePath(points)
   const fillD = `${curveD} L 100 50 L 0 50 Z`
 
   return (
