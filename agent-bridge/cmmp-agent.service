@@ -1,0 +1,29 @@
+# CMMP agent, Linux (systemd) — the counterpart of Start-Agent.cmd.
+#
+#   sudo cp cmmp-agent.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now cmmp-agent
+#   journalctl -u cmmp-agent -f
+#
+# Adjust User= and WorkingDirectory= to wherever agent-bridge/ lives.
+
+[Unit]
+Description=CMMP MusicServer agent
+Documentation=file:///opt/cmmp/agent-bridge/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cmmp
+WorkingDirectory=/opt/cmmp/agent-bridge
+ExecStart=/usr/bin/node bridge.js
+Restart=always
+RestartSec=10
+# agent-state.json is written next to bridge.js, so the working directory
+# must stay writable by User=.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

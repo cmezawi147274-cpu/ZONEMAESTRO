@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Music Server — CMMP Agent</title>
+  <style>
+    :root {
+      --bg: #0f1117; --surface: #1a1d27; --border: #2a2f3a;
+      --text: #e8eaed; --muted: #9aa0a6; --accent: #8ab4f8;
+      --ok: #b9f6ca; --ok-bg: #1b5e20; --warn: #ffcc80; --warn-bg: #5d4037;
+      --bad: #ffcdd2; --bad-bg: #b71c1c;
+    }
+    * { box-sizing: border-box; }
+    body { font-family: "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; }
+    .wrap { max-width: 1000px; margin: 0 auto; padding: 24px; }
+    header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+    h1 { margin: 0; font-size: 1.6rem; }
+    h2 { margin: 0 0 8px; font-size: 1.05rem; }
+    .badge { padding: 4px 12px; border-radius: 999px; font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+    .badge.ok { background: var(--ok-bg); color: var(--ok); }
+    .badge.warn { background: var(--warn-bg); color: var(--warn); }
+    .badge.bad { background: var(--bad-bg); color: var(--bad); }
+    .tabs { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+    .tab { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 10px 18px; border-radius: 8px; cursor: pointer; }
+    .tab.active { border-color: var(--accent); color: var(--accent); }
+    .panel { display: none; }
+    .panel.active { display: block; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+    .label { color: var(--muted); font-size: 0.78rem; margin-bottom: 4px; }
+    input, select, button { font: inherit; }
+    input, select { width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border); background: #12141c; color: var(--text); margin-bottom: 10px; }
+    button { background: #252936; border: 1px solid var(--border); color: var(--text); padding: 8px 14px; border-radius: 6px; cursor: pointer; }
+    button:active:not(:disabled) { transform: scale(0.97); }
+    button.primary { background: #1a3a5c; border-color: #2d5a87; color: var(--accent); }
+    button.danger { background: #3a1a1a; border-color: #5c2d2d; color: #ff8a80; }
+    button.small { padding: 6px 10px; font-size: 0.85rem; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .create-zone-row { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 8px; align-items: start; }
+    @media (max-width: 720px) { .create-zone-row { grid-template-columns: 1fr; } }
+    .zone-title { font-weight: 600; font-size: 1.1rem; }
+    .muted { color: var(--muted); font-size: 0.85rem; }
+    .kv { display: grid; grid-template-columns: minmax(140px, max-content) 1fr; gap: 6px 16px; font-size: 0.88rem; }
+    .kv dt { color: var(--muted); }
+    .kv dd { margin: 0; word-break: break-all; }
+    .queue { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
+    .queue-item { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; font-size: 0.86rem; }
+    .queue-item.current { color: var(--accent); font-weight: 600; }
+    .transport button { min-width: 44px; }
+    .log { background: #0b0d13; border: 1px solid var(--border); border-radius: 8px; padding: 12px; height: 380px; overflow-y: auto; font-family: ui-monospace, Consolas, monospace; font-size: 0.78rem; line-height: 1.5; white-space: pre-wrap; }
+    .log .warn { color: var(--warn); }
+    .log .error { color: #ff8a80; }
+    .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #252936; border: 1px solid var(--border); padding: 12px 20px; border-radius: 8px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90vw; }
+    .toast.show { opacity: 1; }
+    .toast.err { border-color: #5c2d2d; color: #ff8a80; }
+    code { background: #12141c; padding: 1px 5px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Music Server</h1>
+    <span id="statusBadge" class="badge warn">checking…</span>
+    <span class="muted" id="hostBadge"></span>
+    <span class="muted" id="versionLabel"></span>
+  </header>
+
+  <div class="tabs">
+    <button class="tab active" data-panel="zones">Zones</button>
+    <button class="tab" data-panel="setup">Cloud setup</button>
+    <button class="tab" data-panel="activity">Activity</button>
+  </div>
+
+  <!-- ------------------------------------------------------------------ -->
+  <div id="panel-zones" class="panel active">
+    <div class="card">
+      <div class="label">Create zone</div>
+      <div class="create-zone-row">
+        <input id="newZoneId" placeholder="Zone ID (e.g. kitchen)" style="margin-bottom:0">
+        <input id="newZoneName" placeholder="Display name" style="margin-bottom:0">
+        <select id="newZoneDevice" style="margin-bottom:0"><option value="">Default audio device</option></select>
+        <button class="primary" id="btnCreateZone">Create</button>
+      </div>
+    </div>
+    <div id="zonesList" class="grid"></div>
+  </div>
+
+  <!-- ------------------------------------------------------------------ -->
+  <div id="panel-setup" class="panel">
+    <div class="card">
+      <h2>Connect this Music Server to the cloud</h2>
+      <p class="muted" style="margin-top:0">
+        In the cloud portal, open <strong>Music Servers</strong>, pick this venue's server and
+        copy the <strong>pairing code</strong> it shows. Paste it below and press Connect.
+        The code works once and expires, so generate a fresh one if it is refused.
+      </p>
+      <div id="pairForm">
+        <div class="label">Cloud API URL</div>
+        <input id="cmmpUrl" placeholder="https://api.your-domain.com/api">
+        <div class="label">Pairing code</div>
+        <input id="pairCode" placeholder="XXXX-XXXX" autocomplete="off" spellcheck="false">
+        <button class="primary" id="btnPair">Connect</button>
+      </div>
+      <div id="pairedInfo" style="display:none">
+        <dl class="kv">
+          <dt>Cloud API</dt><dd id="infoUrl"></dd>
+          <dt>Server ID</dt><dd id="infoServer"></dd>
+          <dt>Location ID</dt><dd id="infoLocation"></dd>
+          <dt>Last heartbeat</dt><dd id="infoHeartbeat"></dd>
+          <dt>Pending commands</dt><dd id="infoPending"></dd>
+          <dt>Tracks cached</dt><dd id="infoCached"></dd>
+        </dl>
+        <div class="row" style="margin-top:14px">
+          <button class="primary" id="btnSyncNow">Sync now</button>
+          <button class="danger" id="btnUnpair">Unpair from cloud</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Local music service</h2>
+      <dl class="kv">
+        <dt>Local API</dt><dd id="infoLocalApi"></dd>
+        <dt>Health</dt><dd id="infoLocalHealth"></dd>
+        <dt>Playback host</dt><dd id="infoPlaybackHost"></dd>
+        <dt>Music folder</dt><dd id="infoMusicFolder"></dd>
+        <dt>Tracks in library</dt><dd id="infoTrackCount"></dd>
+      </dl>
+      <div class="row" style="margin-top:14px">
+        <button id="btnScan">Rescan music folder</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ------------------------------------------------------------------ -->
+  <div id="panel-activity" class="panel">
+    <div class="card">
+      <h2>Agent activity</h2>
+      <p class="muted" style="margin-top:0">Live log of pairing, heartbeats, cloud commands and music sync.</p>
+      <div class="log" id="logBox"></div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  let zonesCache = [];
+  let lastLogId = 0;
+  let busy = false;
+
+  function toast(msg, isError) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className = 'toast show' + (isError ? ' err' : '');
+    clearTimeout(el._t);
+    el._t = setTimeout(() => { el.className = 'toast'; }, 3600);
+  }
+
+  async function api(path, options) {
+    const res = await fetch(path, options);
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+    if (!res.ok) throw new Error((data && data.error) || res.statusText);
+    return data;
+  }
+
+  const esc = (s) => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const attr = (s) => esc(s).replace(/'/g, '&#39;');
+
+  function fmtTime(s) {
+    const total = Math.max(0, Math.round(Number(s) || 0));
+    return Math.floor(total / 60) + ':' + String(total % 60).padStart(2, '0');
+  }
+  function fmtWhen(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    const secs = Math.round((Date.now() - d.getTime()) / 1000);
+    if (secs < 60) return secs + 's ago';
+    if (secs < 3600) return Math.round(secs / 60) + 'm ago';
+    return d.toLocaleString();
+  }
+
+  document.querySelectorAll('.tab').forEach((tab) => {
+    tab.onclick = () => {
+      document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t === tab));
+      document.querySelectorAll('.panel').forEach((p) => {
+        p.classList.toggle('active', p.id === 'panel-' + tab.dataset.panel);
+      });
+    };
+  });
+
+  // ---------------------------------------------------------------- status
+  // On the very first load only: an agent that has never been paired opens
+  // on the pairing screen rather than an empty Zones tab, so the one thing
+  // an operator must do is the thing in front of them.
+  let firstStatusLoad = true;
+
+  async function loadStatus() {
+    const s = await api('/api/status');
+    if (firstStatusLoad) {
+      firstStatusLoad = false;
+      if (!s.paired) document.querySelector('.tab[data-panel="setup"]').click();
+    }
+
+    // One combined health badge (the local playback service — the thing
+    // that actually makes sound) plus a subtitle for playback-host and
+    // cloud-pairing state, matching the local Setup UI's own header.
+    const statusBadge = document.getElementById('statusBadge');
+    statusBadge.textContent = s.local ? s.local.status.toUpperCase() : 'UNREACHABLE';
+    statusBadge.className = 'badge ' + (s.local && s.local.status === 'healthy' ? 'ok' : 'bad');
+
+    const cloudLabel = s.paired ? (s.lastHeartbeatError ? 'Error' : 'Paired') : 'Not linked';
+    document.getElementById('hostBadge').textContent =
+      'Playback Host: ' + (s.local ? (s.local.playbackHostOnline ? 'Online' : 'Offline') : 'Unknown') +
+      ' · Cloud: ' + cloudLabel;
+
+    document.getElementById('versionLabel').textContent = 'agent ' + s.agentVersion;
+
+    document.getElementById('pairForm').style.display = s.paired ? 'none' : 'block';
+    document.getElementById('pairedInfo').style.display = s.paired ? 'block' : 'none';
+    const urlInput = document.getElementById('cmmpUrl');
+    if (document.activeElement !== urlInput && !urlInput.value) urlInput.value = s.cmmpApiUrl || '';
+
+    document.getElementById('infoUrl').textContent = s.cmmpApiUrl || '—';
+    document.getElementById('infoServer').textContent = s.serverId || '—';
+    document.getElementById('infoLocation').textContent = s.locationId || '—';
+    document.getElementById('infoHeartbeat').textContent =
+      s.lastHeartbeatError ? 'failing — ' + s.lastHeartbeatError : fmtWhen(s.lastHeartbeatAt);
+    document.getElementById('infoPending').textContent = s.pendingCommands;
+    document.getElementById('infoCached').textContent = s.cachedTracks + ' cached, ' + s.mappedTracks + ' matched to local library';
+
+    document.getElementById('infoLocalApi').textContent = s.localApiUrl;
+    document.getElementById('infoLocalHealth').textContent = s.local ? s.local.status : (s.localError || 'unreachable');
+    document.getElementById('infoPlaybackHost').textContent = s.local ? (s.local.playbackHostOnline ? 'online' : 'offline') : '—';
+    document.getElementById('infoMusicFolder').textContent = s.local ? s.local.musicFolder : '—';
+    document.getElementById('infoTrackCount').textContent = s.local ? s.local.trackCount : '—';
+  }
+
+  // ----------------------------------------------------------------- zones
+  function zoneCardHtml(z) {
+    const playing = String(z.status || '').toLowerCase() === 'playing';
+    const hasQueue = z.queue.length > 0;
+    const statusBadge = z.deviceAvailable === false
+      ? '<span class="badge bad">audio device unavailable</span>'
+      : '<span class="badge ' + (playing ? 'ok' : 'warn') + '">' + esc(z.status) + '</span>';
+
+    const queueHtml = hasQueue ? `
+      <div class="queue">
+        <div class="label">Queue (${z.queue.length})</div>
+        ${z.queue.map((t, i) => `
+          <div class="queue-item${i === z.queueIndex ? ' current' : ''}">
+            <span>${i + 1}. ${esc(t.title)} <span class="muted">— ${esc(t.artist || 'Unknown artist')}</span></span>
+            <button class="small" onclick="zoneAction('${attr(z.zoneId)}','playTrack',{trackId:'${attr(t.trackId)}'})">Play</button>
+          </div>`).join('')}
+      </div>` : '<div class="queue"><span class="muted">Nothing synced to this zone yet — assign a playlist in the cloud portal.</span></div>';
+
+    return `
+      <div class="card">
+        <div class="row" style="justify-content:space-between">
+          <span class="zone-title">${esc(z.name)}</span>
+          ${statusBadge}
+        </div>
+        <div class="muted">${esc(z.zoneId)} · ${esc(z.status)} · Vol ${z.volume}${z.muted ? ' (muted)' : ''}</div>
+        <div class="muted">${esc(z.currentTrackTitle || 'Nothing playing')} · ${fmtTime(z.positionSeconds)}${z.queueIndex >= 0 ? ' · track ' + (z.queueIndex + 1) + ' of ' + z.queue.length : ''}</div>
+        <div class="row transport" style="margin-top:12px">
+          <button title="Previous track" ${hasQueue ? '' : 'disabled'} onclick="zoneAction('${attr(z.zoneId)}','previous')">Back</button>
+          ${playing
+            ? `<button class="primary" onclick="zoneAction('${attr(z.zoneId)}','pause')">Pause</button>`
+            : `<button class="primary" onclick="zoneAction('${attr(z.zoneId)}','play')">Play</button>`}
+          <button onclick="zoneAction('${attr(z.zoneId)}','stop')">Stop</button>
+          <button title="Next track" ${hasQueue ? '' : 'disabled'} onclick="zoneAction('${attr(z.zoneId)}','next')">Skip</button>
+          <button title="Volume down" onclick="zoneAction('${attr(z.zoneId)}','volume',{volume:${Math.max(0, z.volume - 10)}})">−</button>
+          <button title="Volume up" onclick="zoneAction('${attr(z.zoneId)}','volume',{volume:${Math.min(100, z.volume + 10)}})">+</button>
+          ${z.muted
+            ? `<button class="primary" onclick="zoneAction('${attr(z.zoneId)}','unmute')">Unmute</button>`
+            : `<button onclick="zoneAction('${attr(z.zoneId)}','mute')">Mute</button>`}
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button class="danger" onclick="deleteZone('${attr(z.zoneId)}','${attr(z.name)}')">Delete</button>
+        </div>
+        ${queueHtml}
+      </div>`;
+  }
+
+  function renderZones() {
+    const container = document.getElementById('zonesList');
+    container.innerHTML = zonesCache.length
+      ? zonesCache.map(zoneCardHtml).join('')
+      : '<div class="card"><span class="muted">No zones on this machine yet. Create one above.</span></div>';
+  }
+
+  async function loadZones() {
+    const container = document.getElementById('zonesList');
+    try {
+      const data = await api('/api/zones');
+      zonesCache = data.zones || [];
+      renderZones();
+    } catch (e) {
+      container.innerHTML = '<div class="card"><span class="muted">' + esc(e.message) + '</span></div>';
+    }
+  }
+
+  window.zoneAction = async (zoneId, action, extra) => {
+    if (busy) return;
+    busy = true;
+    try {
+      const data = await api('/api/zone-action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(Object.assign({ zoneId, action }, extra || {})),
+      });
+      zonesCache = data.zones || zonesCache;
+      renderZones();
+      toast(action === 'previous' ? 'Previous track' : action === 'next' ? 'Skipped to next song' : 'OK');
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      busy = false;
+    }
+  };
+
+  window.deleteZone = async (zoneId, zoneName) => {
+    if (!confirm('Delete zone "' + zoneName + '"? This removes its local playlist and cannot be undone.')) return;
+    try {
+      const data = await api('/api/zones/' + encodeURIComponent(zoneId), { method: 'DELETE' });
+      zonesCache = data.zones || zonesCache.filter((z) => z.zoneId !== zoneId);
+      renderZones();
+      toast('Zone deleted.');
+    } catch (e) {
+      toast(e.message, true);
+    }
+  };
+
+  async function loadDevices() {
+    try {
+      const data = await api('/api/devices');
+      const sel = document.getElementById('newZoneDevice');
+      const devices = data.devices || [];
+      sel.innerHTML = '<option value="">Default audio device</option>' + devices.map((d) => {
+        const stateLabel = d.state !== 'Active' ? ' [' + d.state + ']' : '';
+        return `<option value="${attr(d.deviceId)}"${d.state !== 'Active' ? ' disabled' : ''}>${esc(d.friendlyName)}${d.isDefault ? ' (default)' : ''}${esc(stateLabel)}</option>`;
+      }).join('');
+    } catch (e) {
+      // Non-fatal — zone creation still works with the default device.
+      console.warn('device list unavailable:', e.message);
+    }
+  }
+
+  document.getElementById('btnCreateZone').onclick = async () => {
+    const zoneId = document.getElementById('newZoneId').value.trim();
+    const name = document.getElementById('newZoneName').value.trim();
+    const audioDeviceId = document.getElementById('newZoneDevice').value || null;
+    if (!zoneId || !name) return toast('Zone ID and display name are required.', true);
+    const btn = document.getElementById('btnCreateZone');
+    btn.disabled = true;
+    try {
+      const data = await api('/api/zones', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ zoneId, name, audioDeviceId }),
+      });
+      zonesCache = data.zones || zonesCache;
+      document.getElementById('newZoneId').value = '';
+      document.getElementById('newZoneName').value = '';
+      renderZones();
+      toast('Zone created: ' + name);
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  // ------------------------------------------------------------------- log
+  async function loadLog() {
+    const data = await api('/api/log?since=' + lastLogId);
+    const box = document.getElementById('logBox');
+    if (!data.entries.length) return;
+    const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
+    for (const e of data.entries) {
+      lastLogId = e.id;
+      const div = document.createElement('div');
+      div.className = e.level;
+      div.textContent = new Date(e.at).toLocaleTimeString() + '  ' + e.message;
+      box.appendChild(div);
+    }
+    while (box.childElementCount > 400) box.removeChild(box.firstChild);
+    if (atBottom) box.scrollTop = box.scrollHeight;
+  }
+
+  // ----------------------------------------------------------------- setup
+  document.getElementById('btnPair').onclick = async (ev) => {
+    const btn = ev.currentTarget;
+    const code = document.getElementById('pairCode').value.trim();
+    const cmmpApiUrl = document.getElementById('cmmpUrl').value.trim();
+    if (!code) return toast('Enter the pairing code from the cloud portal.', true);
+    btn.disabled = true;
+    try {
+      await api('/api/pair', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, cmmpApiUrl }),
+      });
+      document.getElementById('pairCode').value = '';
+      toast('Paired with the cloud — syncing has started.');
+      await refresh();
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  document.getElementById('btnUnpair').onclick = async () => {
+    if (!confirm('Unpair this server from the cloud? It stops receiving music and commands until it is paired again with a new code.')) return;
+    try {
+      await api('/api/unpair', { method: 'POST' });
+      toast('Unpaired.');
+      await refresh();
+    } catch (e) { toast(e.message, true); }
+  };
+
+  document.getElementById('btnSyncNow').onclick = async (ev) => {
+    ev.currentTarget.disabled = true;
+    try {
+      await api('/api/sync-now', { method: 'POST' });
+      toast('Sync run complete.');
+      await refresh();
+    } catch (e) { toast(e.message, true); }
+    finally { ev.currentTarget.disabled = false; }
+  };
+
+  document.getElementById('btnScan').onclick = async (ev) => {
+    ev.currentTarget.disabled = true;
+    try {
+      await api('/api/library/scan', { method: 'POST' });
+      toast('Music folder rescanned.');
+      await refresh();
+    } catch (e) { toast(e.message, true); }
+    finally { ev.currentTarget.disabled = false; }
+  };
+
+  // ---------------------------------------------------------------- refresh
+  async function refresh() {
+    try { await loadStatus(); } catch (e) { /* surfaced by the badges */ }
+    try { await loadLog(); } catch (e) { /* ignore */ }
+    if (!busy) await loadZones();
+  }
+
+  loadDevices();
+  refresh();
+  setInterval(refresh, 3000);
+</script>
+</body>
+</html>
