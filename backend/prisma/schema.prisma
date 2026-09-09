@@ -345,9 +345,13 @@ model Zone {
   // Per-zone equalizer: master on/off, 10 band gains, preset id ("custom"
   // when a band has been hand-edited off-preset), and the Bass Boost /
   // Loudness / Virtualizer modules. Shape is src/lib/api/types.ts
-  // ZoneEqualizerSettings. Written the same way `volume`/`muted` are —
-  // by applyZoneCommandEffect() once a SET_EQ RemoteCommand is ack'd by
-  // that zone's agent (see lib/zone-effects.ts), never directly by a
+  // ZoneEqualizerSettings. Normally written straight from the command's
+  // own payload in routes/agent.ts' SET_EQ ack handling, not from the
+  // agent's zoneState read-back — EqualizerAPO's config.txt has no
+  // "what's applied" query, so that read-back never reports it (see the
+  // comment there); routes/commands.ts' applyZoneCommandEffect() (lib/
+  // zone-effects.ts) is only the fallback for the rarer case where the ack
+  // carried no zoneState at all. Never written directly by any other
   // route. Null means "never configured" (flat, off); the frontend
   // supplies its own default rather than this column carrying one.
   equalizer Json?

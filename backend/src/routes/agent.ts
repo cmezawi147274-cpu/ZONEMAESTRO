@@ -333,6 +333,19 @@ export default async function agentRoutes(app: FastifyInstance) {
       if (playbackState && ZONE_STATE_MAP[playbackState.toUpperCase()]) data.playbackState = ZONE_STATE_MAP[playbackState.toUpperCase()]
       const currentTrackId = str(zoneState, "currentTrackId")
       if (currentTrackId) data.currentTrackId = currentTrackId
+      // The agent's zoneState read-back (agent-bridge/lib/agent.js
+      // readBackZoneState) never reports the equalizer — EqualizerAPO's
+      // config.txt has no "what's currently applied" query, only a write
+      // path — so it's carried here from the command's own payload instead
+      // (the same payload ../lib/zone-effects.ts applyZoneCommandEffect
+      // would otherwise apply). Without this, a SET_EQ ack still lands here
+      // (volume/muted/playbackState are always present), which sets
+      // lastAppliedSequence below and makes ../routes/commands.ts skip its
+      // applyZoneCommandEffect fallback as "already applied" — silently
+      // dropping the EQ change even though the Windows side wrote it fine.
+      if (updated.type === "SET_EQ" && command.payload && typeof command.payload === "object") {
+        data.equalizer = command.payload
+      }
       if (Object.keys(data).length > 0) {
         // Mark this command's sequence as applied so ../routes/commands.ts'
         // fallback (../lib/zone-effects.ts#applyZoneCommandEffect) doesn't
