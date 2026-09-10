@@ -72,3 +72,66 @@ export function startUnpairedRetentionSweep() {
   timer.unref()
   return timer
 }
+
+/**
+ * Nightly retention sweep.
+ *
+ * Nothing in this system ever deleted from the append-only tables, so
+ * `ActivityEvent` (already 14,491 rows), `RemoteCommand` (330), `LogEntry`,
+ * `Alert` and `RefreshToken` grew forever — unbounded storage cost, and
+ * steadily slower queries on exactly the tables the dashboard reads on every
+ * page load.
+ *
+ * Deliberately conservative: only rows past their retention window, only
+ * acknowledged alerts, and only refresh tokens that are already dead
+ * (expired or revoked) so an active session is never signed out by a sweep.
+ */
+const RETENTION_SWEEP_MS = 6 * 60 * 60 * 1000
+
+function daysAgo(days: number): Date {
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+}
+
+export function startRetentionSweep() {
+  const run = async () => {
+    try {
+      const activityDays = Number(process.env.RETENTION_ACTIVITY_DAYS ?? 90)
+      const commandDays = Number(process.env.RETENTION_COMMAND_DAYS ?? 90)
+      const logDays = Number(process.env.RETENTION_LOG_DAYS ?? 30)
+      const alertDays = Number(process.env.RETENTION_ALERT_DAYS ?? 90)
+
+      const [activity, commands, logs, alerts, tokens] = await Promise.all([
+        prisma.activityEvent.deleteMany({ where: { timestamp: { lt: daysAgo(activityDays) } } }),
+        prisma.remoteCommand.deleteMany({
+          where: {
+            issuedAt: { lt: daysAgo(commandDays) },
+            status: { in: ["SUCCESS", "FAILED", "TIMEOUT"] },
+          },
+        }),
+        prisma.logEntry.deleteMany({ where: { timestamp: { lt: daysAgo(logDays) } } }),
+        prisma.alert.deleteMany({ where: { acknowledged: true, createdAt: { lt: daysAgo(alertDays) } } }),
+        prisma.refreshToken.deleteMany({
+          where: {
+            OR: [{ expiresAt: { lt: new Date() } }, { revokedAt: { lt: daysAgo(7) } }],
+          },
+        }),
+      ])
+
+      const total = activity.count + commands.count + logs.count + alerts.count + tokens.count
+      if (total > 0) {
+        console.info(
+          `[retention] removed ${total} rows (activity=${activity.count} commands=${commands.count} logs=${logs.count} alerts=${alerts.count} refreshTokens=${tokens.count})`
+        )
+      }
+    } catch {
+      // best-effort — never let a sweep failure take down the process
+    }
+  }
+  // Run once shortly after boot so a long-running instance isn't the only
+  // thing that ever prunes, then on a slow cadence.
+  const kickoff = setTimeout(run, 60_000)
+  kickoff.unref()
+  const timer = setInterval(run, RETENTION_SWEEP_MS)
+  timer.unref()
+  return timer
+}

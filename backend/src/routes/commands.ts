@@ -30,9 +30,23 @@ async function allowedServerIds(scope: TenantScope): Promise<string[] | null> {
   return servers.map((s) => s.id)
 }
 
+/** Resolves issuer display names for a whole page of commands in one
+ * query. Was one `user.findUnique` per row inside a `Promise.all`, so a
+ * 200-row page cost 201 queries. */
+async function displayNamesFor(userIds: (string | null)[]): Promise<Map<string, string>> {
+  const unique = Array.from(new Set(userIds.filter((id): id is string => !!id)))
+  if (unique.length === 0) return new Map()
+  const users = await prisma.user.findMany({
+    where: { id: { in: unique } },
+    select: { id: true, name: true, email: true },
+  })
+  return new Map(users.map((u) => [u.id, u.name ?? u.email ?? u.id]))
+}
+
+/** Single-row convenience over the batch lookup above, for the routes that
+ * return one command. */
 async function displayNameFor(userId: string): Promise<string> {
-  const user = await prisma.user.findUnique({ where: { id: userId } })
-  return user?.name ?? user?.email ?? userId
+  return (await displayNamesFor([userId])).get(userId) ?? userId
 }
 
 export default async function commandsRoutes(app: FastifyInstance) {
@@ -45,7 +59,8 @@ export default async function commandsRoutes(app: FastifyInstance) {
     if (allowed) where.serverId = { in: allowed }
     if (request.query.serverId && (!allowed || allowed.includes(request.query.serverId))) where.serverId = request.query.serverId
     const commands = await prisma.remoteCommand.findMany({ where, orderBy: { issuedAt: "desc" }, take: 200 })
-    const items = await Promise.all(commands.map(async (c) => toRemoteCommand(c, await displayNameFor(c.issuedById))))
+    const names = await displayNamesFor(commands.map((c) => c.issuedById))
+    const items = commands.map((c) => toRemoteCommand(c, names.get(c.issuedById) ?? c.issuedById))
     return reply.send(items)
   })
 

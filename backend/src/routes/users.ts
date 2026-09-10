@@ -150,6 +150,63 @@ export default async function usersRoutes(app: FastifyInstance) {
     return reply.send(toUser(updated))
   })
 
+  /**
+   * Set a user's password.
+   *
+   * Closes the hole that made onboarding impossible: `POST /users/invite`
+   * hashes `crypto.randomBytes(12)` as the new account's password and there
+   * is no mailer anywhere in this system, so nobody — including the invitee —
+   * ever learned what it was. Every invited account was unusable.
+   *
+   * Two callers are allowed:
+   *  - anyone changing *their own* password, which requires proving the
+   *    current one;
+   *  - a manager acting on a user already inside their own visibility scope
+   *    and strictly below them in rank, who may set it without the old one
+   *    (that is the "reset it for them" path a helpdesk needs).
+   *
+   * Every live session for the target is revoked either way — a password
+   * change that leaves stolen refresh tokens working is not a password
+   * change.
+   */
+  app.post<{ Params: { id: string }; Body: { currentPassword?: string; newPassword?: string } }>(
+    "/users/:id/password",
+    async (request, reply) => {
+      const actor = requireUser(request)
+      const { currentPassword, newPassword } = request.body ?? {}
+      if (!newPassword || newPassword.length < MIN_PASSWORD_LENGTH) {
+        throw badRequest(`A password of at least ${MIN_PASSWORD_LENGTH} characters is required.`)
+      }
+
+      const isSelf = actor.id === request.params.id
+      let target
+      if (isSelf) {
+        target = await prisma.user.findUnique({ where: { id: actor.id } })
+        if (!target) throw notFound("User")
+        if (!currentPassword) throw badRequest("Your current password is required.")
+        const ok = await bcrypt.compare(currentPassword, target.passwordHash)
+        if (!ok) throw badRequest("Your current password is incorrect.")
+      } else {
+        if (!can(actor.role, "users:manage")) throw forbidden()
+        target = await prisma.user.findFirst({ where: { AND: [{ id: request.params.id }, visibilityWhere(actor)] } })
+        if (!target) throw notFound("User")
+        // Same seniority rule the rest of this file enforces: never act on a
+        // peer or a superior.
+        if (actor.role !== "SUPER_ADMIN" && RANK[target.role] >= RANK[actor.role]) throw forbidden()
+      }
+
+      await prisma.user.update({
+        where: { id: target.id },
+        data: { passwordHash: await bcrypt.hash(newPassword, 10) },
+      })
+      await prisma.refreshToken.updateMany({
+        where: { userId: target.id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      })
+      return reply.status(204).send()
+    }
+  )
+
   app.delete<{ Params: { id: string } }>("/users/:id", async (request, reply) => {
     const actor = requireUser(request)
     if (!can(actor.role, "users:manage")) throw forbidden()

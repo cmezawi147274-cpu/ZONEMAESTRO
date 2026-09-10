@@ -31,6 +31,14 @@ services:
         BACKEND_INTERNAL_URL: http://backend:4000
     image: cmmp-portal:latest
     restart: unless-stopped
+    # Unbounded json-file logging is how a chatty agent fleet fills the disk
+    # and takes the host down. Capped here as well as quietened in the app.
+    logging:
+      driver: "json-file"
+      options: { max-size: "10m", max-file: "3" }
+    deploy:
+      resources:
+        limits: { memory: 1g }
     env_file:
       - .env
     environment:
@@ -62,6 +70,14 @@ services:
     image: cmmp-backend:latest
     profiles: ["full"]
     restart: unless-stopped
+    # Unbounded json-file logging is how a chatty agent fleet fills the disk
+    # and takes the host down. Capped here as well as quietened in the app.
+    logging:
+      driver: "json-file"
+      options: { max-size: "10m", max-file: "3" }
+    deploy:
+      resources:
+        limits: { memory: 1g }
     env_file:
       - .env
     environment:
@@ -100,6 +116,14 @@ services:
     image: postgres:16-alpine
     profiles: ["full", "migrate"]
     restart: unless-stopped
+    # Unbounded json-file logging is how a chatty agent fleet fills the disk
+    # and takes the host down. Capped here as well as quietened in the app.
+    logging:
+      driver: "json-file"
+      options: { max-size: "10m", max-file: "3" }
+    deploy:
+      resources:
+        limits: { memory: 2g }
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-cmmp}
       POSTGRES_USER: ${POSTGRES_USER:-cmmp}
