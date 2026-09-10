@@ -6,3 +6,8 @@ dist/
 .env.local
 *.log
 agent-bridge/.env
+
+# Editor/agent backups — never tracked.
+*.bak
+*.bak-*
+tsconfig.tsbuildinfo
