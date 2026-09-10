@@ -28,8 +28,16 @@ import { startPrayerScheduler } from "./lib/prayer-scheduler.js"
 
 const app = Fastify({ logger: true })
 
+// `origin: true` (reflect whatever Origin the caller sends) combined with
+// credentials:true means any website can make a credentialed cross-origin
+// request and have the browser accept the response — the portal only ever
+// needs its own origin(s), from env.corsAllowedOrigins (CORS_ALLOWED_ORIGINS
+// in .env; see .env.example for the production value). A request with no
+// Origin header at all (curl, the Windows agent's own fetch calls) is
+// unaffected either way — CORS is a browser-enforced check, not a server
+// perimeter, so this only tightens what a browser will accept.
 await app.register(cors, {
-  origin: true,
+  origin: env.corsAllowedOrigins,
   credentials: true,
 })
 await app.register(multipart, { limits: { fileSize: 200 * 1024 * 1024 } })

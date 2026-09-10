@@ -37,7 +37,10 @@ let io: SocketIOServer | null = null
 export function initRealtime(httpServer: HttpServer) {
   io = new SocketIOServer(httpServer, {
     cors: {
-      origin: true,
+      // Same allowlist as the REST API (src/index.ts) — see the comment
+      // there. Unrestricted `origin: true` + credentials:true let any page
+      // on the web open an authenticated realtime connection.
+      origin: env.corsAllowedOrigins,
       credentials: true,
     },
   })

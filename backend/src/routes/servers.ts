@@ -9,6 +9,18 @@ import { isAgentConnected, pushToAgent, waitForAck, forgetAgent } from "../lib/a
 import { pushActivity } from "../lib/activity.js"
 import { env } from "../lib/env.js"
 
+/** Loads a server the caller is actually entitled to, 404ing (never 403 —
+ * this must not confirm the id exists) for anything outside their tenant
+ * scope. Mirrors zones.ts scopedZone / commands.ts allowedServerIds, which
+ * every other single-server route here should have been using already. */
+async function scopedServer(scope: ReturnType<typeof tenantScope>, serverId: string) {
+  const server = await prisma.musicServer.findUnique({ where: { id: serverId } })
+  if (!server) throw notFound("Server")
+  if (!scope.isSuperAdmin && server.organizationId !== scope.organizationId) throw notFound("Server")
+  if (scope.locationId && server.locationId !== scope.locationId) throw notFound("Server")
+  return server
+}
+
 async function withExtras(server: { id: string }) {
   const [zoneCount, pendingSyncJobs] = await Promise.all([
     prisma.zone.count({ where: { serverId: server.id } }),
@@ -86,9 +98,10 @@ export default async function serversRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string } }>("/servers/:id/pairing-code", async (request, reply) => {
     const user = requireUser(request)
     if (!can(user.role, "server:pair")) throw forbidden()
+    const target = await scopedServer(tenantScope(request), request.params.id)
     const pairingCode = generatePairingCode()
     const server = await prisma.musicServer.update({
-      where: { id: request.params.id },
+      where: { id: target.id },
       data: { pairingCode, pairingCodeHash: hashPairingCode(pairingCode), pairingExpiresAt: pairingExpiry() },
     })
     const { zoneCount, pendingSyncJobs } = await withExtras(server)
@@ -98,7 +111,8 @@ export default async function serversRoutes(app: FastifyInstance) {
   app.delete<{ Params: { id: string } }>("/servers/:id", async (request, reply) => {
     const user = requireUser(request)
     if (!can(user.role, "server:write")) throw forbidden()
-    await prisma.musicServer.delete({ where: { id: request.params.id } })
+    const target = await scopedServer(tenantScope(request), request.params.id)
+    await prisma.musicServer.delete({ where: { id: target.id } })
     return reply.status(204).send()
   })
 
@@ -120,8 +134,10 @@ export default async function serversRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string } }>("/servers/:id/forget", async (request, reply) => {
     const user = requireUser(request)
     if (!can(user.role, "server:forget")) throw forbidden()
-    const server = await prisma.musicServer.findUnique({ where: { id: request.params.id } })
-    if (!server) throw notFound("Server")
+    // "server:forget" is SUPER_ADMIN-only today (see lib/rbac.ts), who is
+    // legitimately cross-tenant — but scope this explicitly anyway rather
+    // than relying on that RBAC assignment never changing.
+    const server = await scopedServer(tenantScope(request), request.params.id)
 
     const paired = Boolean(server.agentTokenHash)
     const reachable = paired && isAgentConnected(server.id)
@@ -191,9 +207,10 @@ export default async function serversRoutes(app: FastifyInstance) {
   app.get<{ Params: { id: string }; Querystring: { limit?: string } }>("/servers/:id/logs", async (request, reply) => {
     const user = requireUser(request)
     if (!can(user.role, "logs:read")) throw forbidden()
+    const target = await scopedServer(tenantScope(request), request.params.id)
     const limit = Number(request.query.limit ?? 100)
     const logs = await prisma.logEntry.findMany({
-      where: { serverId: request.params.id },
+      where: { serverId: target.id },
       orderBy: { timestamp: "desc" },
       take: limit,
     })

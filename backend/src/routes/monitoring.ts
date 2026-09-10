@@ -54,9 +54,19 @@ export default async function monitoringRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string } }>("/monitoring/alerts/:id/acknowledge", async (request, reply) => {
     const user = requireUser(request)
     if (!can(user.role, "logs:read")) throw forbidden()
+    const scope = tenantScope(request)
     const alert = await prisma.alert.findUnique({ where: { id: request.params.id } })
     if (!alert) throw notFound("Alert")
-    const updated = await prisma.alert.update({ where: { id: request.params.id }, data: { acknowledged: true } })
+    if (!scope.isSuperAdmin) {
+      if (!scope.organizationId) throw notFound("Alert")
+      const [server, location] = await Promise.all([
+        alert.serverId ? prisma.musicServer.findUnique({ where: { id: alert.serverId }, select: { organizationId: true } }) : null,
+        alert.locationId ? prisma.location.findUnique({ where: { id: alert.locationId }, select: { organizationId: true } }) : null,
+      ])
+      const orgId = server?.organizationId ?? location?.organizationId
+      if (orgId !== scope.organizationId) throw notFound("Alert")
+    }
+    const updated = await prisma.alert.update({ where: { id: alert.id }, data: { acknowledged: true } })
     return reply.send(toAlert(updated))
   })
 

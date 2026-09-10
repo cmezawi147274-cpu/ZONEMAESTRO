@@ -11,6 +11,41 @@ function hashToken(token: string) {
   return crypto.createHash("sha256").update(token).digest("hex")
 }
 
+// ---------------------------------------------------------------------------
+// Login rate limiting — /auth/login had none at all: an attacker could try
+// passwords against any known email as fast as the network allowed. This is
+// a minimal in-memory sliding window keyed by client IP, not a full
+// @fastify/rate-limit setup, because it needs no new dependency and no
+// shared store for a single backend instance. It resets per-process, so it
+// stops working the moment this backend runs as more than one replica
+// (nothing here is shared across instances) — swap for @fastify/rate-limit
+// with a Redis store, or a proxy-level limiter, before scaling horizontally.
+// ---------------------------------------------------------------------------
+const LOGIN_WINDOW_MS = 15 * 60 * 1000
+const LOGIN_MAX_ATTEMPTS = 10
+const loginAttempts = new Map<string, { count: number; windowStart: number }>()
+
+function checkLoginRateLimit(ip: string) {
+  const now = Date.now()
+  // Opportunistic sweep so long-idle IPs don't sit in memory forever — cheap
+  // relative to how rarely this map should ever hold more than a handful of
+  // entries in practice.
+  if (loginAttempts.size > 10_000) {
+    for (const [key, entry] of loginAttempts) {
+      if (now - entry.windowStart > LOGIN_WINDOW_MS) loginAttempts.delete(key)
+    }
+  }
+  const entry = loginAttempts.get(ip)
+  if (!entry || now - entry.windowStart > LOGIN_WINDOW_MS) {
+    loginAttempts.set(ip, { count: 1, windowStart: now })
+    return
+  }
+  entry.count++
+  if (entry.count > LOGIN_MAX_ATTEMPTS) {
+    throw new HttpError(429, "TOO_MANY_REQUESTS", "Too many login attempts from this address. Try again later.")
+  }
+}
+
 async function issueSession(userId: string) {
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } })
   const accessToken = signAccessToken(user)
@@ -30,6 +65,7 @@ async function issueSession(userId: string) {
 
 export default async function authRoutes(app: FastifyInstance) {
   app.post<{ Body: { email: string; password: string } }>("/auth/login", async (request, reply) => {
+    checkLoginRateLimit(request.ip)
     const { email, password } = request.body ?? ({} as { email: string; password: string })
     if (!email || !password) throw new HttpError(400, "BAD_REQUEST", "Email and password are required.")
 
