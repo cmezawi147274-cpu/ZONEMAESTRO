@@ -19,7 +19,13 @@ export function persistSession(session: Session) {
   if (typeof window === "undefined") return
   localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session))
   const maxAge = 60 * 60 * 24 * 30 // 30 days, matches mock refresh token
-  document.cookie = `${SESSION_COOKIE}=${session.tokens.accessToken}; path=/; max-age=${maxAge}; SameSite=Lax`
+  // `Secure` is derived from the page's own scheme rather than hard-coded:
+  // setting it unconditionally would silently break login on the current
+  // plain-HTTP deployment, and omitting it forever would keep sending the
+  // cookie in the clear once the HTTPS subdomain is live. This turns itself
+  // on the moment the portal is served over https, with no config change.
+  const secure = window.location.protocol === "https:" ? "; Secure" : ""
+  document.cookie = `${SESSION_COOKIE}=${session.tokens.accessToken}; path=/; max-age=${maxAge}; SameSite=Lax${secure}`
 }
 
 export function readSession(): Session | null {
@@ -36,7 +42,8 @@ export function readSession(): Session | null {
 export function clearSession() {
   if (typeof window === "undefined") return
   localStorage.removeItem(SESSION_STORAGE_KEY)
-  document.cookie = `${SESSION_COOKIE}=; path=/; max-age=0`
+  const secure = window.location.protocol === "https:" ? "; Secure" : ""
+  document.cookie = `${SESSION_COOKIE}=; path=/; max-age=0; SameSite=Lax${secure}`
 }
 
 export interface TenantScope {

@@ -24,6 +24,7 @@ import { emitEvent } from "../realtime.js"
 import { pushActivity } from "../lib/activity.js"
 import { MUSIC_SERVER_HUB_PATH } from "../agent/signalrHub.js"
 import { isValidTimeZone } from "../lib/geo.js"
+import { signedMediaUrl } from "../lib/media-url.js"
 import { ZONE_TRANSPORT_TYPES } from "./commands.js"
 import { ZONE_EFFECT_FIELD } from "../lib/zone-effects.js"
 import type { CommandStatus, ZonePlaybackState } from "@prisma/client"
@@ -104,7 +105,13 @@ export default async function agentRoutes(app: FastifyInstance) {
   // long-lived credential. Outbound-only — no inbound port ever opens on
   // the restaurant network.
   // --------------------------------------------------------------------
-  app.post<{ Body: Record<string, unknown> }>(`${p}/pairing/complete`, async (request, reply) => {
+  app.post<{ Body: Record<string, unknown> }>(
+    `${p}/pairing/complete`,
+    // A pairing code is 8 characters from a 32-symbol alphabet. Brute force
+    // over HTTP was never practical, but nothing capped attempts either —
+    // which also made this a free denial-of-service surface.
+    { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
+    async (request, reply) => {
     const body = request.body ?? {}
     const code = str(body, "code")
     if (!code) throw badRequest("The Code field is required.")
@@ -172,7 +179,8 @@ export default async function agentRoutes(app: FastifyInstance) {
       heartbeatIntervalSeconds: env.agentHeartbeatIntervalSeconds,
       musicServerHubUrl: `${env.publicApiUrl}${MUSIC_SERVER_HUB_PATH}`,
     })
-  })
+    }
+  )
 
   // --------------------------------------------------------------------
   // Token rotation — an already-paired agent can mint a fresh token
@@ -464,7 +472,9 @@ export default async function agentRoutes(app: FastifyInstance) {
         title: s.track.title,
         artist: s.track.artist,
         fileSizeMb: s.track.fileSizeMb,
-        url: `${env.publicApiUrl}/media/music/${encodeURIComponent(s.track.storageKey)}`,
+        // Signed and expiring — /media/music/ is no longer an open
+        // directory (see lib/media-url.ts).
+        url: signedMediaUrl(s.track.storageKey),
       })),
     })
   })

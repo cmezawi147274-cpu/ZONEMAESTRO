@@ -6,6 +6,19 @@ import { toUser } from "../lib/serialize.js"
 import { signAccessToken, signRefreshToken, verifyRefreshToken, accessTokenExpiresAtIso, refreshTokenExpiresAt } from "../lib/jwt.js"
 import { requireAuth, requireUser } from "../lib/auth-context.js"
 import { HttpError } from "../lib/http-error.js"
+import { env } from "../lib/env.js"
+
+/** A bcrypt hash of a value nobody knows, compared against when the email
+ * doesn't exist. Without it this route returned in microseconds for an
+ * unknown address and in ~100ms for a known one, which is enough to
+ * enumerate valid accounts. */
+const DUMMY_HASH = bcrypt.hashSync("cmmp-timing-equalizer", 10)
+
+/** Tight limit on the credential endpoints — the global ceiling is far too
+ * generous to stop password guessing against an admin portal. */
+const authRateLimit = {
+  config: { rateLimit: { max: env.authRateLimitPerMinute, timeWindow: "1 minute" } },
+}
 
 function hashToken(token: string) {
   return crypto.createHash("sha256").update(token).digest("hex")
@@ -29,22 +42,23 @@ async function issueSession(userId: string) {
 }
 
 export default async function authRoutes(app: FastifyInstance) {
-  app.post<{ Body: { email: string; password: string } }>("/auth/login", async (request, reply) => {
+  app.post<{ Body: { email: string; password: string } }>("/auth/login", authRateLimit, async (request, reply) => {
     const { email, password } = request.body ?? ({} as { email: string; password: string })
     if (!email || !password) throw new HttpError(400, "BAD_REQUEST", "Email and password are required.")
 
     const user = await prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } })
-    if (!user) throw new HttpError(401, "INVALID_CREDENTIALS", "Invalid email or password.")
 
-    const valid = await bcrypt.compare(password, user.passwordHash)
-    if (!valid) throw new HttpError(401, "INVALID_CREDENTIALS", "Invalid email or password.")
+    // Always spend the same work whether or not the account exists, then
+    // fail with one indistinguishable message.
+    const valid = await bcrypt.compare(password, user?.passwordHash ?? DUMMY_HASH)
+    if (!user || !valid) throw new HttpError(401, "INVALID_CREDENTIALS", "Invalid email or password.")
 
     await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } })
     const session = await issueSession(user.id)
     return reply.send(session)
   })
 
-  app.post<{ Body: { refreshToken?: string } }>("/auth/refresh", async (request, reply) => {
+  app.post<{ Body: { refreshToken?: string } }>("/auth/refresh", authRateLimit, async (request, reply) => {
     const { refreshToken } = request.body ?? {}
     if (!refreshToken) throw new HttpError(400, "BAD_REQUEST", "refreshToken is required.")
 
@@ -52,7 +66,22 @@ export default async function authRoutes(app: FastifyInstance) {
     if (!claims) throw new HttpError(401, "INVALID_TOKEN", "Invalid or expired refresh token.")
 
     const stored = await prisma.refreshToken.findUnique({ where: { tokenHash: hashToken(refreshToken) } })
-    if (!stored || stored.revokedAt || stored.expiresAt < new Date()) {
+    if (!stored || stored.expiresAt < new Date()) {
+      throw new HttpError(401, "INVALID_TOKEN", "Invalid or expired refresh token.")
+    }
+
+    // Reuse detection. A refresh token is single-use: presenting one that
+    // was already rotated away means either a replay or that the token was
+    // stolen and the thief got there first. Either way the whole family is
+    // compromised, so every live token for that user is revoked and they
+    // must sign in again — previously this just 401'd and left the attacker's
+    // freshly-issued token working.
+    if (stored.revokedAt) {
+      await prisma.refreshToken.updateMany({
+        where: { userId: stored.userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      })
+      request.log.warn({ userId: stored.userId }, "Refresh token reuse detected — all sessions revoked.")
       throw new HttpError(401, "INVALID_TOKEN", "Invalid or expired refresh token.")
     }
 
