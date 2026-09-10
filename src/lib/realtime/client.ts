@@ -1,6 +1,7 @@
 "use client"
 
 import { env } from "@/lib/config"
+import { readSession } from "@/lib/auth/session"
 import { mockBus } from "@/lib/realtime/bus"
 import { startMockSimulation } from "@/lib/mock/simulate"
 import type { ConnectionState, RealtimeEvent, RealtimeListener } from "@/lib/realtime/types"
@@ -48,11 +49,32 @@ class RealtimeClient {
       return
     }
 
+    // The /realtime namespace now authenticates the handshake and places
+    // each socket in a per-organization room (backend/src/realtime.ts), so
+    // the access token has to travel with the connection. Without it the
+    // server rejects the handshake with UNAUTHORIZED — previously the
+    // namespace accepted anyone and broadcast every tenant's events to
+    // every socket.
     import("socket.io-client").then(({ io }) => {
-      const socket = io(env.wsUrl, { transports: ["websocket"], withCredentials: true })
+      const token = readSession()?.tokens.accessToken
+      if (!token) {
+        this.setState("disconnected")
+        return
+      }
+      const socket = io(env.wsUrl, {
+        transports: ["websocket"],
+        withCredentials: true,
+        auth: { token },
+      })
       this.socket = socket
       socket.on("connect", () => this.setState("connected"))
       socket.on("disconnect", () => this.setState("disconnected"))
+      // A rejected handshake (expired/absent token) must not spin forever:
+      // stop retrying and let the API layer's 401 path drive re-login.
+      socket.on("connect_error", (err: Error) => {
+        this.setState("disconnected")
+        if (err.message === "UNAUTHORIZED") socket.close()
+      })
       socket.on("event", (payload: RealtimeEvent) => mockBus.emit(payload))
     })
   }
