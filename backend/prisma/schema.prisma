@@ -172,6 +172,8 @@ model Organization {
   playlists    Playlist[]
   prayerConfig PrayerConfig?
   eqPresets    EqPreset[]
+  tracks       Track[]
+  musicFolders MusicFolder[]
 
   @@index([slug])
 }
@@ -376,6 +378,16 @@ model Track {
   uploadedById String
   uploadedAt   DateTime @default(now())
 
+  /// Owning tenant, or null for the operator's shared catalogue — the same
+  /// convention Playlist.organizationId already uses. Null rows are readable
+  /// by every organization and mutable only by a SUPER_ADMIN; a non-null row
+  /// is private to that organization. Nullable (not required) because every
+  /// track uploaded before this column existed was uploaded by a SUPER_ADMIN
+  /// whose own organizationId is null, so there is no tenant to backfill them
+  /// to — they are the shared catalogue. See backend/src/lib/tenant.ts.
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
   // Folder library grouping (src/lib/api/types.ts Track.folderId). Optional —
   // every track uploaded before folders existed (and any never assigned to
   // one) shows up as "Unfiled" in the UI. Deleting a folder never deletes
@@ -391,6 +403,7 @@ model Track {
   // index type targets MySQL/MongoDB, not PostgreSQL.
   @@index([genre])
   @@index([folderId])
+  @@index([organizationId])
 }
 
 /// A user-defined grouping of Tracks in the cloud music library
@@ -401,7 +414,13 @@ model MusicFolder {
   name      String
   createdAt DateTime @default(now())
 
+  /// Same shared-catalogue convention as Track.organizationId above.
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
   tracks Track[]
+
+  @@index([organizationId])
 }
 
 model Playlist {

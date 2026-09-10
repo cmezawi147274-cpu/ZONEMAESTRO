@@ -193,7 +193,14 @@ export function UploadMusicDialog() {
         <input
           ref={inputRef}
           type="file"
-          accept="audio/*"
+          // Explicit list rather than a bare `audio/*`, and it mirrors the
+          // server's allowlist in backend/src/routes/music.ts exactly.
+          // WAV is named twice on purpose: some platforms report it as
+          // audio/wav and others as audio/x-wav, and a picker matching only
+          // one of them greys out perfectly valid files. The extensions are
+          // listed alongside the MIME types because Windows in particular
+          // maps several of these inconsistently.
+          accept=".mp3,.wav,.flac,.ogg,.oga,.m4a,.aac,audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/ogg,audio/mp4,audio/aac"
           multiple
           className="hidden"
           onChange={(e) => addFiles(e.target.files)}
