@@ -9,6 +9,33 @@ import type { LogLevel } from "@prisma/client"
 export default async function monitoringRoutes(app: FastifyInstance) {
   app.addHook("preHandler", requireAuth)
 
+  /**
+   * The security audit trail. Scoped like everything else: an organization
+   * sees its own entries, a SUPER_ADMIN sees all. Read-only by design —
+   * there is no route that edits or deletes an audit entry, because a trail
+   * the subject can rewrite is not a trail.
+   */
+  app.get<{ Querystring: { limit?: string; action?: string; targetId?: string } }>(
+    "/monitoring/audit",
+    async (request, reply) => {
+      const user = requireUser(request)
+      if (!can(user.role, "logs:read")) throw forbidden()
+      const scope = tenantScope(request)
+      const limit = Math.min(500, Math.max(1, Number(request.query.limit ?? 100)))
+
+      const where: Record<string, unknown> = {}
+      if (!scope.isSuperAdmin) {
+        if (!scope.organizationId) return reply.send([])
+        where.organizationId = scope.organizationId
+      }
+      if (request.query.action) where.action = request.query.action
+      if (request.query.targetId) where.targetId = request.query.targetId
+
+      const entries = await prisma.auditLog.findMany({ where, orderBy: { at: "desc" }, take: limit })
+      return reply.send(entries.map((e) => ({ ...e, at: e.at.toISOString() })))
+    }
+  )
+
   app.get<{ Querystring: { limit?: string } }>("/monitoring/activity", async (request, reply) => {
     const user = requireUser(request)
     if (!can(user.role, "logs:read")) throw forbidden()

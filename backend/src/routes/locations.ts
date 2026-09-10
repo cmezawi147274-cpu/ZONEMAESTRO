@@ -4,6 +4,7 @@ import { toLocation } from "../lib/serialize.js"
 import { requireAuth, requireUser, tenantScope } from "../lib/auth-context.js"
 import { can } from "../lib/rbac.js"
 import { forbidden, notFound } from "../lib/http-error.js"
+import { audit } from "../lib/audit.js"
 
 async function withCounts(loc: { id: string }) {
   const [serverCount, zoneCount] = await Promise.all([
@@ -94,6 +95,7 @@ export default async function locationsRoutes(app: FastifyInstance) {
     if (!existing) throw notFound("Location")
     if (!scope.isSuperAdmin && existing.organizationId !== scope.organizationId) throw notFound("Location")
     await prisma.location.delete({ where: { id: existing.id } })
+    await audit(request, { action: "location.delete", targetType: "Location", targetId: existing.id, summary: `Deleted location "${existing.name}".`, metadata: { organizationId: existing.organizationId } })
     return reply.status(204).send()
   })
 }

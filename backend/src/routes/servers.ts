@@ -18,6 +18,7 @@ import { env } from "../lib/env.js"
 // non-super caller whose own organizationId is null, rather than relying on
 // MusicServer.organizationId being non-nullable to make the comparison fail.
 import { scopedServer } from "../lib/tenant.js"
+import { audit } from "../lib/audit.js"
 
 async function withExtras(server: { id: string }) {
   const [zoneCount, pendingSyncJobs] = await Promise.all([
@@ -111,6 +112,7 @@ export default async function serversRoutes(app: FastifyInstance) {
     if (!can(user.role, "server:write")) throw forbidden()
     const target = await scopedServer(tenantScope(request), request.params.id)
     await prisma.musicServer.delete({ where: { id: target.id } })
+    await audit(request, { action: "server.delete", targetType: "MusicServer", targetId: target.id, summary: `Deleted server "${target.name}".`, metadata: { organizationId: target.organizationId, locationId: target.locationId } })
     return reply.status(204).send()
   })
 
@@ -189,6 +191,15 @@ export default async function serversRoutes(app: FastifyInstance) {
         ? `${server.name} was forgotten by ${user.email} — the venue player was shut down and its pairing wiped.`
         : `${server.name} was forgotten by ${user.email} — removed from the portal without reaching the Windows machine.`,
       serverId: null,
+    })
+    await audit(request, {
+      action: "server.forget",
+      targetType: "MusicServer",
+      targetId: server.id,
+      summary: reachable
+        ? `Forgot server "${server.name}" — venue player shut down, pairing wiped, cloud row deleted.`
+        : `Forgot server "${server.name}" — cloud row deleted without reaching the Windows machine.`,
+      metadata: { paired, reachable, organizationId: server.organizationId, locationId: server.locationId },
     })
 
     return reply.send({

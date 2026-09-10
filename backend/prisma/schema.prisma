@@ -568,6 +568,42 @@ model Alert {
 /// monitoringApi.activity). Not present in the frozen top-level schema —
 /// backend-only addition, written whenever a realtime event worth showing
 /// in the activity log is emitted.
+/// Security audit trail — who did what, to what, from where.
+///
+/// Distinct from ActivityEvent, which is an operational feed for the
+/// dashboard and carries no actor, no IP and no before/after. That made
+/// "which of our staff deleted this playlist?" unanswerable, and is a
+/// standard question in B2B procurement. Written best-effort by
+/// lib/audit.ts on every privileged mutation; a failure to log never fails
+/// the request it describes.
+model AuditLog {
+  id             String   @id @default(cuid())
+  at             DateTime @default(now())
+
+  /// Denormalised on purpose: the point of an audit trail is to survive the
+  /// deletion of the actor and the target, so it holds no foreign keys.
+  actorId        String?
+  actorEmail     String
+  actorRole      String
+  organizationId String?
+
+  /// Dotted verb, e.g. "user.delete", "server.forget", "track.delete".
+  action     String
+  targetType String
+  targetId   String?
+  summary    String
+  ip         String?
+  userAgent  String?
+  /// Small structured detail (changed fields, prior values). Never
+  /// credentials — lib/audit.ts strips them.
+  metadata   Json?
+
+  @@index([organizationId, at])
+  @@index([actorId, at])
+  @@index([targetType, targetId])
+  @@index([at])
+}
+
 model ActivityEvent {
   id        String   @id @default(cuid())
   type      String

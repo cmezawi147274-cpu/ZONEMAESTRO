@@ -2,6 +2,8 @@ import { prisma } from "./db.js"
 import { env } from "./env.js"
 import { pushActivity } from "./activity.js"
 import { forgetAgent, isAgentConnected } from "./agent-registry.js"
+import fs from "node:fs"
+import path from "node:path"
 
 /** Periodic check: any MusicServer we believe is ONLINE/WARNING but whose
  * agent hasn't heartbeated (REST) or held an open MusicServerHub socket
@@ -99,8 +101,13 @@ export function startRetentionSweep() {
       const commandDays = Number(process.env.RETENTION_COMMAND_DAYS ?? 90)
       const logDays = Number(process.env.RETENTION_LOG_DAYS ?? 30)
       const alertDays = Number(process.env.RETENTION_ALERT_DAYS ?? 90)
+      // Audit entries outlive everything else here on purpose: they are the
+      // record an incident or a customer dispute is investigated from, so the
+      // window is generous and set separately rather than sharing the
+      // operational-log one.
+      const auditDays = Number(process.env.RETENTION_AUDIT_DAYS ?? 400)
 
-      const [activity, commands, logs, alerts, tokens] = await Promise.all([
+      const [activity, commands, logs, alerts, tokens, audits] = await Promise.all([
         prisma.activityEvent.deleteMany({ where: { timestamp: { lt: daysAgo(activityDays) } } }),
         prisma.remoteCommand.deleteMany({
           where: {
@@ -115,12 +122,13 @@ export function startRetentionSweep() {
             OR: [{ expiresAt: { lt: new Date() } }, { revokedAt: { lt: daysAgo(7) } }],
           },
         }),
+        prisma.auditLog.deleteMany({ where: { at: { lt: daysAgo(auditDays) } } }),
       ])
 
-      const total = activity.count + commands.count + logs.count + alerts.count + tokens.count
+      const total = activity.count + commands.count + logs.count + alerts.count + tokens.count + audits.count
       if (total > 0) {
         console.info(
-          `[retention] removed ${total} rows (activity=${activity.count} commands=${commands.count} logs=${logs.count} alerts=${alerts.count} refreshTokens=${tokens.count})`
+          `[retention] removed ${total} rows (activity=${activity.count} commands=${commands.count} logs=${logs.count} alerts=${alerts.count} refreshTokens=${tokens.count} audit=${audits.count})`
         )
       }
     } catch {
@@ -132,6 +140,69 @@ export function startRetentionSweep() {
   const kickoff = setTimeout(run, 60_000)
   kickoff.unref()
   const timer = setInterval(run, RETENTION_SWEEP_MS)
+  timer.unref()
+  return timer
+}
+
+
+/**
+ * Reconciles the music volume against the Track table.
+ *
+ * DELETE /music/:id unlinks the audio with `.catch(() => {})`, so any failure
+ * — a permissions blip, a file already gone, a container restart mid-request
+ * — silently leaves the bytes on disk forever while the row disappears. That
+ * had already accumulated 18 orphans against 38 tracks here: a slow storage
+ * leak with no upper bound, on the one volume that also holds licensed audio.
+ *
+ * Deliberately cautious, because deleting a customer's audio by mistake is
+ * far worse than keeping a stray file:
+ *   - only files with no Track row at all,
+ *   - only files older than a grace window, so an upload still being written
+ *     (the row is created after the bytes land, see routes/music.ts) is never
+ *     mistaken for an orphan,
+ *   - and it refuses to run at all if the Track table reads as empty, which
+ *     is what a database outage looks like from here and would otherwise
+ *     delete the entire library.
+ */
+const ORPHAN_SWEEP_MS = 24 * 60 * 60 * 1000
+
+export function startOrphanMediaSweep() {
+  const run = async () => {
+    try {
+      const graceHours = Number(process.env.ORPHAN_MEDIA_GRACE_HOURS ?? 24)
+      const dir = env.musicStorageDir
+      if (!fs.existsSync(dir)) return
+
+      const rows = await prisma.track.findMany({ select: { storageKey: true } })
+      if (rows.length === 0) {
+        console.warn("[orphan-sweep] Track table is empty — refusing to sweep (this is what a DB outage looks like)")
+        return
+      }
+      const known = new Set(rows.map((r) => r.storageKey))
+      const cutoff = Date.now() - graceHours * 60 * 60 * 1000
+
+      let removed = 0
+      let bytes = 0
+      for (const name of await fs.promises.readdir(dir)) {
+        if (known.has(name)) continue
+        const full = path.join(dir, name)
+        const stat = await fs.promises.stat(full).catch(() => null)
+        if (!stat || !stat.isFile()) continue
+        if (stat.mtimeMs > cutoff) continue
+        await fs.promises.unlink(full)
+        removed++
+        bytes += stat.size
+      }
+      if (removed > 0) {
+        console.info(`[orphan-sweep] removed ${removed} orphaned media file(s), ${(bytes / 1048576).toFixed(1)} MB reclaimed`)
+      }
+    } catch (err) {
+      console.warn("[orphan-sweep] failed:", err)
+    }
+  }
+  const kickoff = setTimeout(run, 5 * 60 * 1000)
+  kickoff.unref()
+  const timer = setInterval(run, ORPHAN_SWEEP_MS)
   timer.unref()
   return timer
 }

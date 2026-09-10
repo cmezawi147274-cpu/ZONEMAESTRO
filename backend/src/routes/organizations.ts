@@ -5,6 +5,7 @@ import { requireAuth, requireUser, tenantScope } from "../lib/auth-context.js"
 import { can } from "../lib/rbac.js"
 import { forbidden, notFound } from "../lib/http-error.js"
 import { pushActivity } from "../lib/activity.js"
+import { audit } from "../lib/audit.js"
 
 async function withCounts(org: { id: string }) {
   const [locationCount, serverCount] = await Promise.all([
@@ -78,6 +79,7 @@ export default async function organizationsRoutes(app: FastifyInstance) {
     const user = requireUser(request)
     if (!can(user.role, "org:write")) throw forbidden()
     await prisma.organization.delete({ where: { id: request.params.id } })
+    await audit(request, { action: "organization.delete", targetType: "Organization", targetId: request.params.id, summary: `Deleted organization ${request.params.id} and everything under it.` })
     return reply.status(204).send()
   })
 }

@@ -6,6 +6,7 @@ import { toUser } from "../lib/serialize.js"
 import { requireAuth, requireUser, type AuthUser } from "../lib/auth-context.js"
 import { can } from "../lib/rbac.js"
 import { badRequest, forbidden, notFound } from "../lib/http-error.js"
+import { audit } from "../lib/audit.js"
 import type { Role } from "@prisma/client"
 
 /** Seniority, so a creator can never mint a peer or a superior. */
@@ -121,6 +122,7 @@ export default async function usersRoutes(app: FastifyInstance) {
     const created = await prisma.user.create({
       data: { name, email: normalizedEmail, role, ...scope, passwordHash },
     })
+    await audit(request, { action: "user.create", targetType: "User", targetId: created.id, summary: `Created ${created.email} as ${created.role}.`, metadata: { role: created.role, organizationId: created.organizationId, locationId: created.locationId } })
     return reply.status(201).send(toUser(created))
   })
 
@@ -147,6 +149,7 @@ export default async function usersRoutes(app: FastifyInstance) {
         ...scope,
       },
     })
+    await audit(request, { action: "user.update", targetType: "User", targetId: updated.id, summary: `Updated ${updated.email}.`, metadata: { before: { role: target.role, organizationId: target.organizationId, locationId: target.locationId }, after: { role: updated.role, organizationId: updated.organizationId, locationId: updated.locationId } } })
     return reply.send(toUser(updated))
   })
 
@@ -203,6 +206,7 @@ export default async function usersRoutes(app: FastifyInstance) {
         where: { userId: target.id, revokedAt: null },
         data: { revokedAt: new Date() },
       })
+      await audit(request, { action: "user.password_set", targetType: "User", targetId: target.id, summary: isSelf ? `${target.email} changed their own password.` : `Password reset for ${target.email}.`, metadata: { self: isSelf } })
       return reply.status(204).send()
     }
   )
@@ -214,6 +218,7 @@ export default async function usersRoutes(app: FastifyInstance) {
     if (!target) throw notFound("User")
     if (actor.role !== "SUPER_ADMIN" && RANK[target.role] >= RANK[actor.role]) throw forbidden()
     await prisma.user.delete({ where: { id: target.id } })
+    await audit(request, { action: "user.delete", targetType: "User", targetId: target.id, summary: `Deleted ${target.email} (${target.role}).`, metadata: { role: target.role, organizationId: target.organizationId } })
     return reply.status(204).send()
   })
 }

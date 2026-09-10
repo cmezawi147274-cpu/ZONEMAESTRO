@@ -7,6 +7,7 @@ import { signAccessToken, signRefreshToken, verifyRefreshToken, accessTokenExpir
 import { requireAuth, requireUser } from "../lib/auth-context.js"
 import { HttpError } from "../lib/http-error.js"
 import { env } from "../lib/env.js"
+import { audit } from "../lib/audit.js"
 
 /** A bcrypt hash of a value nobody knows, compared against when the email
  * doesn't exist. Without it this route returned in microseconds for an
@@ -51,10 +52,20 @@ export default async function authRoutes(app: FastifyInstance) {
     // Always spend the same work whether or not the account exists, then
     // fail with one indistinguishable message.
     const valid = await bcrypt.compare(password, user?.passwordHash ?? DUMMY_HASH)
-    if (!user || !valid) throw new HttpError(401, "INVALID_CREDENTIALS", "Invalid email or password.")
+    if (!user || !valid) {
+      // Failed attempts are the ones an investigation actually needs.
+      await audit(request, {
+        action: "auth.login_failed", targetType: "User", targetId: user?.id ?? null,
+        summary: `Failed sign-in for ${email.trim().toLowerCase()}.`,
+        actorEmailOverride: email.trim().toLowerCase(),
+      })
+      throw new HttpError(401, "INVALID_CREDENTIALS", "Invalid email or password.")
+    }
 
     await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } })
     const session = await issueSession(user.id)
+    request.authUser = { id: user.id, email: user.email, role: user.role, organizationId: user.organizationId, locationId: user.locationId }
+    await audit(request, { action: "auth.login", targetType: "User", targetId: user.id, summary: `${user.email} signed in.` })
     return reply.send(session)
   })
 
@@ -105,6 +116,7 @@ export default async function authRoutes(app: FastifyInstance) {
       where: { userId: user.id, revokedAt: null },
       data: { revokedAt: new Date() },
     })
+    await audit(request, { action: "auth.logout", targetType: "User", targetId: user.id, summary: `${user.email} signed out of all sessions.` })
     return reply.status(204).send()
   })
 

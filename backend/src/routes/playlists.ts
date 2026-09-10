@@ -5,6 +5,7 @@ import { requireAuth, requireUser, tenantScope } from "../lib/auth-context.js"
 import { can } from "../lib/rbac.js"
 import { forbidden, notFound } from "../lib/http-error.js"
 import { queuePlaylistTracksForServer } from "../lib/zone-effects.js"
+import { audit } from "../lib/audit.js"
 import type { PlaylistTargetType } from "@prisma/client"
 
 async function withTrackIds(playlistId: string): Promise<string[]> {
@@ -114,6 +115,7 @@ export default async function playlistsRoutes(app: FastifyInstance) {
     const user = requireUser(request)
     if (!can(user.role, "playlist:write")) throw forbidden()
     await prisma.playlist.delete({ where: { id: request.params.id } })
+    await audit(request, { action: "playlist.delete", targetType: "Playlist", targetId: request.params.id, summary: `Deleted playlist ${request.params.id}.` })
     return reply.status(204).send()
   })
 

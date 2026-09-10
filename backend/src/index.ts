@@ -26,7 +26,7 @@ import monitoringRoutes from "./routes/monitoring.js"
 import prayerRoutes from "./routes/prayer.js"
 import agentRoutes from "./routes/agent.js"
 import { attachMusicServerHub } from "./agent/signalrHub.js"
-import { startAgentHeartbeatSweep, startUnpairedRetentionSweep, startRetentionSweep } from "./lib/agent-sweep.js"
+import { startAgentHeartbeatSweep, startUnpairedRetentionSweep, startRetentionSweep, startOrphanMediaSweep } from "./lib/agent-sweep.js"
 import { startPrayerScheduler } from "./lib/prayer-scheduler.js"
 import { prisma } from "./lib/db.js"
 
@@ -185,7 +185,7 @@ await app.register(agentRoutes)
 await app.listen({ port: env.port, host: "0.0.0.0" })
 initRealtime(app.server)
 attachMusicServerHub(app.server)
-const sweeps = [startAgentHeartbeatSweep(), startUnpairedRetentionSweep(), startRetentionSweep()]
+const sweeps = [startAgentHeartbeatSweep(), startUnpairedRetentionSweep(), startRetentionSweep(), startOrphanMediaSweep()]
 // Prayer Mode executes here, not in a browser tab: pauses must keep
 // happening with the portal closed. See lib/prayer-scheduler.ts.
 sweeps.push(startPrayerScheduler())
