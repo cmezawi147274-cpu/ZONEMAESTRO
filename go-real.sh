@@ -6,8 +6,18 @@ if [ ! -f .env ]; then
 fi
 sed -i 's/NEXT_PUBLIC_USE_MOCK_API=true/NEXT_PUBLIC_USE_MOCK_API=false/' .env
 grep -q '^NEXT_PUBLIC_USE_MOCK_API=' .env || echo 'NEXT_PUBLIC_USE_MOCK_API=false' >> .env
-grep -q '^POSTGRES_PASSWORD=' .env || echo 'POSTGRES_PASSWORD=change-me-before-deploying' >> .env
-grep -q '^DATABASE_URL=' .env || echo 'DATABASE_URL=postgresql://cmmp:change-me-before-deploying@postgres:5432/cmmp?schema=public' >> .env
+# Never write a known placeholder as a credential. The backend refuses to
+# boot on the values published in .env.example (backend/src/lib/env.ts
+# assertSecretsAreNotPlaceholders), because leaving them in place means
+# anyone who can read this repository can forge a SUPER_ADMIN token.
+if ! grep -q '^POSTGRES_PASSWORD=' .env; then
+  PG=$(openssl rand -base64 32 | tr -d '\n/+=' | head -c 40)
+  echo "POSTGRES_PASSWORD=$PG" >> .env
+  echo "DATABASE_URL=postgresql://cmmp:$PG@postgres:5432/cmmp?schema=public" >> .env
+fi
+for KEY in JWT_ACCESS_SECRET JWT_REFRESH_SECRET; do
+  grep -q "^$KEY=" .env || echo "$KEY=$(openssl rand -base64 48 | tr -d '\n')" >> .env
+done
 echo "MOCK line:"
 grep MOCK_API .env
 docker compose --profile full up -d --build

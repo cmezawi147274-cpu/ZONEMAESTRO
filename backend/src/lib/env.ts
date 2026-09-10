@@ -19,6 +19,14 @@ export const env = {
     .map((s) => s.trim())
     .filter(Boolean),
   musicStorageDir: path.resolve(process.cwd(), process.env.MUSIC_STORAGE_DIR ?? "./data/music"),
+  /** How long a signed /media/music/ URL stays valid (see lib/media-url.ts).
+   * Generous by default: a venue on a slow link can take hours to work
+   * through a sync queue, and a dead link there looks like a sync failure. */
+  mediaUrlTtlSeconds: Number(process.env.MEDIA_URL_TTL_SECONDS ?? 24 * 60 * 60),
+  /** Requests per minute per IP, applied globally. Login and agent pairing
+   * get their own tighter limits at their routes. */
+  rateLimitPerMinute: Number(process.env.RATE_LIMIT_PER_MINUTE ?? 600),
+  authRateLimitPerMinute: Number(process.env.AUTH_RATE_LIMIT_PER_MINUTE ?? 10),
 
   // ----------------------------------------------------------------------
   // Windows MusicServer agent surface. This backend IS the cloud (Linux);
@@ -57,6 +65,58 @@ export const env = {
   // off and wipe its local pairing before it can ack. The cloud row is only
   // deleted once that ack lands (see routes/servers.ts).
   agentForgetAckTimeoutMs: Number(process.env.AGENT_FORGET_ACK_TIMEOUT_MS ?? 30000),
+}
+
+/**
+ * Secrets that ship as placeholders in the tracked `.env.example`. A
+ * deployment that never replaced them is signing tokens with a value
+ * published in the git repository, so anyone who can read the repo can mint
+ * a SUPER_ADMIN token. This was live in production and is why boot now
+ * fails closed rather than warning.
+ */
+const PUBLISHED_PLACEHOLDERS = [
+  "replace-with-a-long-random-value",
+  "replace-with-a-different-long-random-value",
+  "change-me-before-deploying",
+  "cmmp-mock-mode-development-secret-do-not-use-in-prod",
+]
+
+/**
+ * Throws unless every secret has actually been set to something private.
+ * Called at boot before the server listens — a refusal to start is far
+ * cheaper than an undetected authentication bypass.
+ */
+export function assertSecretsAreNotPlaceholders(): void {
+  const offenders: string[] = []
+  const check = (name: string, value: string, minLength = 24) => {
+    if (PUBLISHED_PLACEHOLDERS.includes(value)) offenders.push(`${name} is the placeholder value from .env.example`)
+    else if (value.length < minLength) offenders.push(`${name} is only ${value.length} characters (minimum ${minLength})`)
+  }
+  check("JWT_ACCESS_SECRET", env.jwtAccessSecret)
+  check("JWT_REFRESH_SECRET", env.jwtRefreshSecret)
+  if (env.jwtAccessSecret === env.jwtRefreshSecret) {
+    offenders.push("JWT_ACCESS_SECRET and JWT_REFRESH_SECRET must be different values")
+  }
+  for (const placeholder of PUBLISHED_PLACEHOLDERS) {
+    if (env.databaseUrl.includes(placeholder)) {
+      offenders.push("DATABASE_URL still contains the placeholder password from .env.example")
+      break
+    }
+  }
+
+  if (offenders.length > 0) {
+    throw new Error(
+      [
+        "Refusing to start with placeholder secrets:",
+        ...offenders.map((o) => `  - ${o}`),
+        "",
+        "Generate real values (openssl rand -base64 48) and set them in .env,",
+        "then recreate the container. These placeholders are published in the",
+        "git-tracked .env.example, so leaving them in place means anyone who",
+        "can read the repository can forge a SUPER_ADMIN token.",
+      ].join("\n")
+    )
+  }
 }
 
 /** PUBLIC_API_URL failing is silent everywhere else: agents are handed a
