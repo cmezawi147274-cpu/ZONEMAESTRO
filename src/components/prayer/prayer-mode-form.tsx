@@ -191,7 +191,7 @@ export function PrayerModeForm() {
         <Card>
           <CardHeader>
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <CardTitle className="text-sm font-medium">Today's Prayer Times</CardTitle>
+              <CardTitle className="text-sm font-medium">Today&rsquo;s Prayer Times</CardTitle>
               <VenueLocationBadge state={venueState} detail={venueDetail} />
             </div>
             <CardDescription>
