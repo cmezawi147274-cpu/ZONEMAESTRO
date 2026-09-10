@@ -1,4 +1,5 @@
 import Fastify from "fastify"
+import crypto from "node:crypto"
 import cors from "@fastify/cors"
 import helmet from "@fastify/helmet"
 import rateLimit from "@fastify/rate-limit"
@@ -74,15 +75,38 @@ await app.register(cors, {
 })
 
 // Global ceiling. Auth and pairing get their own tighter limits at their
-// routes; agents are exempted because a venue legitimately polls hard and
-// is already authenticated by an opaque token.
+// routes.
+//
+// Keyed per *agent* rather than per IP on the agent surface. A venue
+// legitimately makes ~50 requests a minute (heartbeat, command poll, two
+// sync loops), so a plain per-IP budget silently caps how many venues can
+// sit behind one public address — around a dozen at the default, after
+// which real venues start receiving 429s and appear to go offline. That is
+// a scaling cliff nobody would think to look for.
+//
+// Agent requests already carry a long-lived opaque token bound to exactly
+// one MusicServer row (lib/agent-auth.ts), so the token is a far better
+// identity than the IP: each venue gets its own budget, a single misbehaving
+// agent is still contained, and an attacker without a valid token cannot
+// reach this path at all — they fall through to the IP-keyed branch. The
+// token is hashed rather than used raw so a credential never becomes a
+// rate-limiter map key.
+const agentPrefix = env.agentApiPrefix.replace(/\/$/, "")
 await app.register(rateLimit, {
   global: true,
   max: env.rateLimitPerMinute,
   timeWindow: "1 minute",
   allowList: () => false,
-  keyGenerator: (request) =>
-    (request.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ?? request.ip,
+  keyGenerator: (request) => {
+    const ip = (request.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ?? request.ip
+    const path = request.raw.url?.split("?")[0] ?? ""
+    if (path.startsWith(`${agentPrefix}/server/`)) {
+      const header = request.headers.authorization
+      const token = header?.startsWith("Bearer ") ? header.slice(7) : null
+      if (token) return `agent:${crypto.createHash("sha256").update(token).digest("hex")}`
+    }
+    return ip
+  },
   // Carries BOTH keys deliberately: `statusCode` is what Fastify's error
   // handler below reads to pick the response status, `status` is what the
   // portal's ApiError shape (src/lib/api/types.ts) reads. Returning only
