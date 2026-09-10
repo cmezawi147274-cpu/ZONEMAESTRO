@@ -1,0 +1,119 @@
+name: CI
+
+# There was no CI at all. Two separate audits found cross-tenant IDORs in
+# code that read as scoped, which is exactly the failure mode automation
+# catches and review does not. Nothing merges without these passing.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    name: Typecheck, lint and audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install portal dependencies
+        run: npm ci
+      - name: Typecheck portal
+        run: npm run typecheck
+      - name: Lint portal
+        run: npm run lint
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+      - name: Generate Prisma client
+        working-directory: backend
+        run: npx prisma generate
+      - name: Typecheck and build backend
+        working-directory: backend
+        run: npm run build
+
+      # Production dependencies only: the prisma CLI chain carries advisories
+      # that never reach the runtime image, which ships with --omit=dev.
+      - name: Audit production dependencies (portal)
+        run: npm audit --omit=dev --audit-level=high
+      - name: Audit production dependencies (backend)
+        working-directory: backend
+        run: npm audit --omit=dev --audit-level=high
+
+  integration:
+    name: Tenant isolation and security surface
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: cmmp
+          POSTGRES_PASSWORD: ci-not-a-real-secret
+          POSTGRES_DB: cmmp
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://cmmp:ci-not-a-real-secret@localhost:5432/cmmp?schema=public
+      # Real random values, not the placeholders in .env.example — the backend
+      # refuses to boot on those, which is the behaviour under test elsewhere.
+      JWT_ACCESS_SECRET: ci-access-0e7b1c4a9f2d6e8b3a5c7d9f1e3b5a7c9d1f3e5b
+      JWT_REFRESH_SECRET: ci-refresh-4d2f6a8c0e1b3d5f7a9c2e4b6d8f0a1c3e5b7d9f
+      CORS_ALLOWED_ORIGINS: http://localhost:3000
+      PUBLIC_API_URL: http://localhost:4000
+      MUSIC_STORAGE_DIR: /tmp/cmmp-music
+      GIT_COMMIT: ${{ github.sha }}
+      PORT: 4000
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Apply migrations
+        working-directory: backend
+        run: npx prisma generate && npx prisma migrate deploy
+
+      - name: Build backend
+        working-directory: backend
+        run: npm run build
+
+      - name: Start backend
+        working-directory: backend
+        run: |
+          mkdir -p /tmp/cmmp-music
+          node dist/index.js & echo $! > /tmp/backend.pid
+          for i in $(seq 1 40); do
+            if curl -sf http://localhost:4000/ready >/dev/null; then
+              echo "backend ready after ${i}s"; exit 0
+            fi
+            sleep 1
+          done
+          echo "backend never became ready"; exit 1
+
+      - name: Run regression suites
+        working-directory: backend
+        env:
+          TEST_API_URL: http://localhost:4000
+        run: npm test
+
+      - name: Stop backend
+        if: always()
+        run: kill "$(cat /tmp/backend.pid)" 2>/dev/null || true
