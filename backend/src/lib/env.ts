@@ -59,12 +59,56 @@ export const env = {
   agentOfflineAfterMissedBeats: Number(process.env.SERVER_OFFLINE_AFTER_MISSED_BEATS ?? 3),
   // How long a zone transport command (PLAY/PAUSE/.../MUTE) waits for the
   // agent's ack before the portal request fails.
-  agentCommandAckTimeoutMs: Number(process.env.AGENT_COMMAND_ACK_TIMEOUT_MS ?? 3000),
+  // Default raised 3000 -> 8000 because 3000 was demonstrably too short in
+  // production and had to be hand-patched there: the agent polls for pending
+  // commands every ~1500ms whenever its push socket is down, and this server
+  // is reached over the public internet (frequently a venue on slow DSL),
+  // so a command can burn most of that poll window plus real round-trip
+  // latency before it is even picked up — never mind executed and acked with
+  // real post-command zone state. At 3000 that surfaced as SET_EQ and
+  // transport commands reporting "No response ... within 3000ms" for venues
+  // that had in fact run them. Leaving the default at a value production
+  // already had to override is a trap for the next deployment.
+  agentCommandAckTimeoutMs: Number(process.env.AGENT_COMMAND_ACK_TIMEOUT_MS ?? 8000),
   // "Forget Server" waits far longer than a transport command: the agent has
   // to stop the Windows service, kill the playback processes, turn auto-start
   // off and wipe its local pairing before it can ack. The cloud row is only
   // deleted once that ack lands (see routes/servers.ts).
   agentForgetAckTimeoutMs: Number(process.env.AGENT_FORGET_ACK_TIMEOUT_MS ?? 30000),
+
+  // ----------------------------------------------------------------------
+  // Outbound email (see lib/mailer.ts). Optional: a deployment that leaves
+  // these unset simply never sends invite mail — POST /users/invite still
+  // creates the account, it just logs a warning instead of emailing it. Mail
+  // is best-effort by design, same as lib/audit.ts: a mailer outage must
+  // never be the reason a user couldn't be created.
+  smtpHost: process.env.SMTP_HOST,
+  smtpPort: Number(process.env.SMTP_PORT ?? 587),
+  // Implicit TLS (port 465). Leave false for STARTTLS on 587, which is what
+  // both Gmail and Office 365 expect.
+  smtpSecure: (process.env.SMTP_SECURE ?? "false") === "true",
+  smtpUser: process.env.SMTP_USER,
+  smtpPassword: process.env.SMTP_PASSWORD,
+  mailFromEmail: process.env.MAIL_FROM_EMAIL ?? process.env.SMTP_USER,
+  mailFromName: process.env.MAIL_FROM_NAME ?? "Zone Maestro",
+
+  // How long a repeat POST /pairing/complete with the same (already
+  // consumed) code is honored as a replay rather than rejected — see
+  // lib/pairing.ts. Long enough to cover a real retry after a lost
+  // response, short enough that a code found later (e.g. on a technician's
+  // notepad) can't be reused as a fresh pairing.
+  pairingReplayWindowMinutes: Number(process.env.PAIRING_REPLAY_WINDOW_MINUTES ?? 10),
+  // Ceiling on pairing attempts against one *resolved* location per minute,
+  // independent of the existing per-IP limit on the route — see
+  // routes/agent.ts POST /pairing/complete and lib/pairing.ts. Protects one
+  // venue from a flood that arrives from many different source IPs.
+  pairingLocationRateLimitPerMinute: Number(process.env.PAIRING_LOCATION_RATE_LIMIT_PER_MINUTE ?? 20),
+  // Optional. When set, each server reports an `agentVersionStatus` of
+  // current / outdated / unknown against it — visibility only, since there
+  // is no self-update path on the venue side (see routes/agent.ts pairing/
+  // heartbeat, lib/serialize.ts toMusicServer). Unset means no policy, and
+  // every server reports "unknown" rather than being assumed current.
+  minSupportedAgentVersion: process.env.MIN_SUPPORTED_AGENT_VERSION || null,
 }
 
 /**

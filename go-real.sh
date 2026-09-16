@@ -21,4 +21,4 @@ done
 echo "MOCK line:"
 grep MOCK_API .env
 docker compose --profile full up -d --build
-echo "DONE. Open http://181.214.100.148:3000/login and press Ctrl+F5"
+echo "DONE. Open https://cloud.zonemaestro.com/login and press Ctrl+F5"

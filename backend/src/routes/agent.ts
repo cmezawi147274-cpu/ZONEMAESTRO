@@ -17,7 +17,7 @@ import { prisma } from "../lib/db.js"
 import { env } from "../lib/env.js"
 import { badRequest, notFound, HttpError } from "../lib/http-error.js"
 import { requireAgent, generateAgentToken, sha256Hex } from "../lib/agent-auth.js"
-import { hashPairingCode, normalizePairingCode } from "../lib/pairing.js"
+import { hashPairingCode, normalizePairingCode, pairingReplayWindowMs, checkAndRecordLocationPairingAttempt } from "../lib/pairing.js"
 import { seededShuffle } from "../lib/shuffle.js"
 import { markAgentSeen, resolveAck, forgetAgent } from "../lib/agent-registry.js"
 import { emitEvent } from "../realtime.js"
@@ -99,6 +99,21 @@ export default async function agentRoutes(app: FastifyInstance) {
     if (!env.musicServerAgentAllowed) throw new HttpError(503, "AGENT_DISABLED", "Windows MusicServer agent integration is disabled on this backend.")
   })
 
+  // Every agent request carries `X-Request-Id: vk-<hex>` and logs it
+  // locally to agent.log — this is the only thing that lets a support
+  // conversation ("the venue's log says vk-abc123 failed") be matched back
+  // to what the cloud saw for that same request. Logged at info (not the
+  // default warn) for the same reason the rest of this backend does: at
+  // ~50 req/min/venue, always-on would be a firehose — see index.ts's
+  // logger comment. Set LOG_LEVEL=info to see these while debugging one.
+  // Never logs the request body — a pairing code must never reach a log.
+  app.addHook("onRequest", async (request) => {
+    const requestId = request.headers["x-request-id"]
+    if (typeof requestId === "string" && requestId) {
+      request.log.info({ requestId, method: request.method, url: request.raw.url }, "agent request")
+    }
+  })
+
   // --------------------------------------------------------------------
   // Pairing: technician types a CMMP-issued code (POST /servers) into
   // Windows Setup at :8765; the agent exchanges it here for its
@@ -115,37 +130,100 @@ export default async function agentRoutes(app: FastifyInstance) {
     const body = request.body ?? {}
     const code = str(body, "code")
     if (!code) throw badRequest("The Code field is required.")
+    const codeHash = hashPairingCode(normalizePairingCode(code))
+    const now = new Date()
+
+    // Resolve the code to a candidate server under every state it could be
+    // in, so a caller gets the *right* reason rather than one generic
+    // "invalid or expired" for every case — PAIRING_CODE_EXPIRED and
+    // PAIRING_CODE_ALREADY_USED need different on-site advice ("wait, ask
+    // for a fresh code" vs. "this PC already has a token, check the app").
+    // Order matters: an active code is checked first since that's the
+    // overwhelmingly common case and the only one worth an extra query for.
+    const active = await prisma.musicServer.findFirst({ where: { pairingCodeHash: codeHash, pairingExpiresAt: { gt: now } } })
+
+    if (!active) {
+      const expired = await prisma.musicServer.findFirst({ where: { pairingCodeHash: codeHash } })
+      if (expired) throw new HttpError(400, "PAIRING_CODE_EXPIRED", "This pairing code has expired. Ask for a new one.")
+
+      // Not active, not expired-but-still-on-file: maybe it was already
+      // consumed. A repeat of the *same* code within the replay window is
+      // treated as the agent (or a proxy in front of it) retrying after
+      // never seeing the first response — idempotent, not a second
+      // identity, so it gets back exactly what the first call produced.
+      const consumed = await prisma.musicServer.findFirst({ where: { pairingConsumedCodeHash: codeHash } })
+      if (consumed) {
+        const withinWindow =
+          consumed.pairingConsumedAt && now.getTime() - consumed.pairingConsumedAt.getTime() <= pairingReplayWindowMs()
+        if (withinWindow && consumed.pairingConsumedTokenPlain) {
+          if (!checkAndRecordLocationPairingAttempt(consumed.locationId)) {
+            throw new HttpError(429, "RATE_LIMITED", "Too many pairing attempts for this location. Please slow down and try again shortly.")
+          }
+          markAgentSeen(consumed.id)
+          return reply.status(201).send({
+            agentToken: consumed.pairingConsumedTokenPlain,
+            serverId: consumed.id,
+            locationId: consumed.locationId,
+            heartbeatIntervalSeconds: env.agentHeartbeatIntervalSeconds,
+            musicServerHubUrl: `${env.publicApiUrl}${MUSIC_SERVER_HUB_PATH}`,
+          })
+        }
+        if (!checkAndRecordLocationPairingAttempt(consumed.locationId)) {
+          throw new HttpError(429, "RATE_LIMITED", "Too many pairing attempts for this location. Please slow down and try again shortly.")
+        }
+        throw new HttpError(400, "PAIRING_CODE_ALREADY_USED", "This pairing code has already been used. Ask for a new one.")
+      }
+
+      // A fresh code was issued for this server before this one was ever
+      // used (POST /servers/:id/pairing-code overwrites the active slot) —
+      // say so precisely rather than letting it look like a typo.
+      const revoked = await prisma.musicServer.findFirst({ where: { pairingRevokedCodeHash: codeHash } })
+      if (revoked) {
+        if (!checkAndRecordLocationPairingAttempt(revoked.locationId)) {
+          throw new HttpError(429, "RATE_LIMITED", "Too many pairing attempts for this location. Please slow down and try again shortly.")
+        }
+        throw new HttpError(400, "PAIRING_CODE_REVOKED", "This pairing code was replaced by a newer one. Ask for the current code.")
+      }
+
+      throw new HttpError(400, "PAIRING_CODE_UNKNOWN", "Invalid pairing code.")
+    }
+
+    if (!checkAndRecordLocationPairingAttempt(active.locationId)) {
+      throw new HttpError(429, "RATE_LIMITED", "Too many pairing attempts for this location. Please slow down and try again shortly.")
+    }
+
     const agentServerGuid = str(body, "serverGuid", "agentServerGuid") ?? randomUUID()
     const serverVersion = str(body, "serverVersion", "version")
     const os = str(body, "os", "operatingSystem") ?? "Windows"
     const siteId = str(body, "siteId")
     const ipAddress = (request.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ?? request.ip
 
-    const server = await prisma.musicServer.findFirst({
-      where: { pairingCodeHash: hashPairingCode(normalizePairingCode(code)), pairingExpiresAt: { gt: new Date() } },
-    })
-    if (!server) throw badRequest("Invalid or expired pairing code.")
-
-    const agentToken = generateAgentToken(server.id)
-    const now = new Date()
+    const agentToken = generateAgentToken(active.id)
     const updated = await prisma.musicServer.update({
-      where: { id: server.id },
+      where: { id: active.id },
       data: {
         agentTokenHash: sha256Hex(agentToken),
         pairedAt: now,
         lastHeartbeatAt: now,
         status: "ONLINE",
-        version: serverVersion ?? server.version,
+        version: serverVersion ?? active.version,
         os,
         ipAddress,
         pairingCode: null,
         pairingCodeHash: null,
         pairingExpiresAt: null,
+        // Remembered so a replay of this same code (response lost, agent or
+        // a proxy retries) within the window above returns identically
+        // instead of erroring — see that branch and pairingConsumedTokenPlain's
+        // doc comment in prisma/schema.prisma for the plaintext trade-off.
+        pairingConsumedCodeHash: codeHash,
+        pairingConsumedAt: now,
+        pairingConsumedTokenPlain: agentToken,
       },
     })
     await prisma.agentLink.upsert({
-      where: { cmmpServerId: server.id },
-      create: { cmmpServerId: server.id, agentServerGuid, siteId: siteId ?? null, lastSeenAt: now },
+      where: { cmmpServerId: active.id },
+      create: { cmmpServerId: active.id, agentServerGuid, siteId: siteId ?? null, lastSeenAt: now },
       update: { agentServerGuid, siteId: siteId ?? null, lastSeenAt: now },
     })
 
@@ -153,12 +231,24 @@ export default async function agentRoutes(app: FastifyInstance) {
     // holding a token nothing will use again — a permanently OFFLINE
     // duplicate in the portal. Release it here.
     const previousServerId = str(body, "previousServerId")
-    if (previousServerId && previousServerId !== server.id) {
+    if (previousServerId && previousServerId !== active.id) {
       const previous = await prisma.musicServer.findUnique({ where: { id: previousServerId } })
-      if (previous && previous.organizationId === server.organizationId) {
+      if (previous && previous.organizationId === active.organizationId) {
         await prisma.musicServer.update({
           where: { id: previous.id },
-          data: { agentTokenHash: null, pairedAt: null, status: "UNKNOWN" },
+          data: {
+            agentTokenHash: null,
+            pairedAt: null,
+            status: "UNKNOWN",
+            // Without this, the released row is exempt from
+            // lib/agent-sweep.ts's unpaired-retention sweep forever — that
+            // sweep skips any row with a null pairingExpiresAt exactly
+            // because ordinary "paired, never released" rows have one, and
+            // this release path used to leave the row in that same shape.
+            // Setting it to "already expired" puts the row on the normal
+            // retention clock instead of leaving a permanent ghost.
+            pairingExpiresAt: now,
+          },
         })
         forgetAgent(previous.id)
         await pushActivity({
@@ -169,12 +259,12 @@ export default async function agentRoutes(app: FastifyInstance) {
       }
     }
 
-    markAgentSeen(server.id)
-    await pushActivity({ type: "SERVER_CONNECTED", message: `${updated.name} paired and connected.`, serverId: server.id })
+    markAgentSeen(active.id)
+    await pushActivity({ type: "SERVER_CONNECTED", message: `${updated.name} paired and connected.`, serverId: active.id })
 
     return reply.status(201).send({
       agentToken,
-      serverId: server.id,
+      serverId: active.id,
       locationId: updated.locationId,
       heartbeatIntervalSeconds: env.agentHeartbeatIntervalSeconds,
       musicServerHubUrl: `${env.publicApiUrl}${MUSIC_SERVER_HUB_PATH}`,
@@ -246,7 +336,12 @@ export default async function agentRoutes(app: FastifyInstance) {
     }
 
     const pendingCount = await prisma.remoteCommand.count({ where: { serverId: ctx.serverId, status: { in: ["PENDING", "SENT"] } } })
-    return reply.send({ ok: true, serverTimeUtc: new Date().toISOString(), pendingCommands: pendingCount })
+    // `serverTime` alongside the existing `serverTimeUtc` (kept for any
+    // build already reading it): venue PCs keep bad time (dead CMOS
+    // batteries, NTP jumps), and this is what lets the agent detect real
+    // skew against its own clock instead of guessing.
+    const serverTimeIso = new Date().toISOString()
+    return reply.send({ ok: true, serverTime: serverTimeIso, serverTimeUtc: serverTimeIso, pendingCommands: pendingCount })
   })
 
   // --------------------------------------------------------------------

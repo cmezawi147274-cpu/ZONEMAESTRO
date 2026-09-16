@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/common/page-header"
 import { EmptyState } from "@/components/common/empty-state"
 import { RoleGate } from "@/components/common/role-gate"
 import { ServerStatusBadge } from "@/components/common/status-badge"
+import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -76,7 +77,36 @@ export default function ServersPage() {
                     <TableCell>
                       <ServerStatusBadge status={server.status} />
                     </TableCell>
-                    <TableCell className="text-muted-foreground">{server.version}</TableCell>
+                    <TableCell className="text-muted-foreground">
+                      <span className="inline-flex items-center gap-1.5">
+                        {server.version}
+                        {/* There is no remote update path — a technician has
+                            to visit the venue — so flagging it here is the
+                            only control over an outdated fleet there is.
+                            "Unknown" is its own state rather than silently
+                            passing: a version nobody can parse is not
+                            evidence that the venue is fine. The raw string
+                            is always rendered above, whatever its shape. */}
+                        {server.agentVersionStatus === "outdated" && (
+                          <Badge
+                            variant="outline"
+                            className="border-amber-500/40 text-amber-600 dark:text-amber-500"
+                            title={`Below the minimum supported agent version (${server.minSupportedAgentVersion})`}
+                          >
+                            Outdated
+                          </Badge>
+                        )}
+                        {server.agentVersionStatus === "unknown" && server.minSupportedAgentVersion && (
+                          <Badge
+                            variant="outline"
+                            className="text-muted-foreground"
+                            title={`Cannot be compared against the minimum supported version (${server.minSupportedAgentVersion})`}
+                          >
+                            Unknown
+                          </Badge>
+                        )}
+                      </span>
+                    </TableCell>
                     <TableCell className="w-40">
                       <div className="space-y-1">
                         <div className="flex items-center gap-2">

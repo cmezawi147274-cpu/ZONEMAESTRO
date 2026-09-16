@@ -24,3 +24,34 @@ export function normalizePairingCode(code: string): string {
 export function pairingExpiry(): Date {
   return new Date(Date.now() + env.agentPairingCodeTtlMinutes * 60 * 1000)
 }
+
+export function pairingReplayWindowMs(): number {
+  return env.pairingReplayWindowMinutes * 60 * 1000
+}
+
+// --------------------------------------------------------------------
+// Per-location pairing rate limit — independent of the per-IP limit
+// already applied at the route (see index.ts's global rate-limit
+// keyGenerator and the route-level config in routes/agent.ts). An
+// unauthenticated pairing attempt carries no location until its code is
+// looked up, so this is checked *after* a code resolves to a server (any
+// outcome: valid, expired, consumed, or revoked — anything but a pure
+// typo, which the per-IP limit alone already bounds). Process-local, same
+// trade-off as lib/agent-registry.ts: a multi-instance deployment would
+// need this shared (Redis/Postgres), a single backend instance does not.
+// --------------------------------------------------------------------
+const locationAttempts = new Map<string, number[]>()
+
+/** Records one attempt against `locationId` and returns whether it is
+ * within the configured per-minute budget. Bounded memory: each location's
+ * array never grows past the limit, since anything older than the window
+ * is dropped on every call. */
+export function checkAndRecordLocationPairingAttempt(locationId: string): boolean {
+  const now = Date.now()
+  const windowMs = 60 * 1000
+  const recent = (locationAttempts.get(locationId) ?? []).filter((t) => now - t < windowMs)
+  const allowed = recent.length < env.pairingLocationRateLimitPerMinute
+  if (allowed) recent.push(now)
+  locationAttempts.set(locationId, recent)
+  return allowed
+}

@@ -1,6 +1,6 @@
 {
   "name": "cmmp-agent-bridge",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Bridges the CMMP cloud backend's Windows-agent protocol to the local MusicServer.Api Setup UI's REST API (:8765), since the compiled MusicServer.Service.exe does not implement CMMP pairing. See README.md.",
   "type": "commonjs",

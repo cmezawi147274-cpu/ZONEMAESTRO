@@ -112,6 +112,10 @@ export default async function serversRoutes(app: FastifyInstance) {
     if (!can(user.role, "server:write")) throw forbidden()
     const target = await scopedServer(tenantScope(request), request.params.id)
     await prisma.musicServer.delete({ where: { id: target.id } })
+    // Lets a still-running agent's next call get SERVER_DELETED instead of
+    // the indistinguishable-from-a-typo AGENT_TOKEN_UNKNOWN — see
+    // lib/agent-auth.ts and the DeletedServerTombstone model.
+    await prisma.deletedServerTombstone.upsert({ where: { id: target.id }, create: { id: target.id }, update: {} })
     await audit(request, { action: "server.delete", targetType: "MusicServer", targetId: target.id, summary: `Deleted server "${target.name}".`, metadata: { organizationId: target.organizationId, locationId: target.locationId } })
     return reply.status(204).send()
   })
@@ -184,6 +188,7 @@ export default async function serversRoutes(app: FastifyInstance) {
     // Cascades to zones, commands, logs and sync state; alerts fall back to
     // a null serverId — exactly what DELETE /servers/:id already relies on.
     await prisma.musicServer.delete({ where: { id: server.id } })
+    await prisma.deletedServerTombstone.upsert({ where: { id: server.id }, create: { id: server.id }, update: {} })
     forgetAgent(server.id)
     await pushActivity({
       type: "SERVER_DISCONNECTED",

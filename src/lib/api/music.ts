@@ -9,6 +9,12 @@ import type { Track, TrackSyncState, MusicFolder } from "@/lib/api/types"
 export interface TrackFilters {
   search?: string
   genre?: string
+  /** Resolve exactly these track ids. Use this instead of fetching the whole
+   * library and joining client-side — the list endpoint is paginated, so a
+   * naive join silently drops anything past the first page. */
+  ids?: string
+  /** Explicit page size. The backend caps this. */
+  limit?: string
 }
 
 export interface UpdateTrackInput {

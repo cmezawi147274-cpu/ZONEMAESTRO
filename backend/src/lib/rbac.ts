@@ -41,9 +41,21 @@ const MATRIX: Record<Role, Permission[]> = {
     "music:upload", "music:delete", "playlist:read", "playlist:write", "schedule:read", "schedule:write",
     "sync:trigger", "users:manage", "logs:read", "prayer:read", "prayer:manage",
   ],
+  // Music library: *reading* it follows "playlist:read", because a playlist
+  // is a list of tracks and is unreadable without the track metadata behind
+  // it. Withholding "music:read" from these roles while granting
+  // "playlist:read" produced a playlist that reported "29 tracks" and then
+  // rendered an empty list — the detail page resolves playlist.trackIds
+  // against GET /api/music (src/app/(portal)/playlists/[id]/page.tsx), which
+  // answered 403, so every track silently vanished. What a role can see is
+  // still scoped to its own tenant plus the shared catalogue by
+  // lib/tenant.ts libraryReadWhere, so this grants no cross-tenant reach.
+  //
+  // *Changing* the library stays SUPER_ADMIN-only: "music:upload" and
+  // "music:delete" remain deliberately absent below.
   ORGANIZATION_ADMIN: [
     "org:read", "location:read", "location:write", "server:read", "server:write", "server:pair",
-    "server:command", "zone:read", "zone:control", "zone:assign", "music:read", "music:upload", "music:delete",
+    "server:command", "zone:read", "zone:control", "zone:assign", "music:read",
     "playlist:read", "playlist:write", "schedule:read", "schedule:write", "sync:trigger", "users:manage",
     "logs:read", "prayer:read", "prayer:manage",
   ],

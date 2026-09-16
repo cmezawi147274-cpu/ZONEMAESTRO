@@ -43,8 +43,11 @@ services:
       - .env
     environment:
       BACKEND_INTERNAL_URL: http://backend:4000
+    # Bound to localhost only: caddy (below) is the sole public entry point,
+    # terminating TLS on 80/443 for cloud.zonemaestro.com and proxying here.
+    # Still reachable from the host itself (curl localhost:3000) for debugging.
     ports:
-      - "${APP_PORT:-3000}:3000"
+      - "127.0.0.1:${APP_PORT:-3000}:3000"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
@@ -86,8 +89,11 @@ services:
       MUSIC_STORAGE_DIR: /app/data/music
     volumes:
       - music-data:/app/data/music
+    # Bound to localhost only — see the matching note on `app` above. Caddy
+    # reaches this over the Docker network as `backend:4000`, not via this
+    # published port.
     ports:
-      - "${BACKEND_PORT:-4000}:4000"
+      - "127.0.0.1:${BACKEND_PORT:-4000}:4000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -111,6 +117,30 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
+  # --- TLS termination / reverse proxy ---------------------------------------
+  # The only service with ports published to the world (80/443). Auto-issues
+  # and renews a real Let's Encrypt cert for cloud.zonemaestro.com via the
+  # HTTP-01 challenge on port 80 — requires that port reachable from the
+  # internet (check any cloud-provider firewall/security group in front of
+  # this host, not just this compose file). Routing is in ./Caddyfile.
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["full"]
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options: { max-size: "10m", max-file: "3" }
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+      - backend
 
   postgres:
     image: postgres:16-alpine
@@ -141,3 +171,8 @@ services:
 volumes:
   postgres-data:
   music-data:
+  # Caddy's cert/key storage and internal state — must persist across
+  # restarts or every restart re-issues certs and risks Let's Encrypt's
+  # rate limits.
+  caddy-data:
+  caddy-config:

@@ -54,6 +54,13 @@ const app = Fastify({
         "*.accessToken",
         "*.refreshToken",
         "*.agentToken",
+        // A pairing code is a bearer credential until it is spent. Nothing
+        // logs a request body today (Fastify's default serializers don't),
+        // so this is defence in depth: it means adding body logging later —
+        // the obvious thing to reach for when debugging a venue — cannot
+        // quietly start writing live pairing codes to disk.
+        "req.body.code",
+        "*.pairingCode",
       ],
       censor: "[redacted]",
     },
@@ -137,9 +144,18 @@ app.addHook("onRequest", async (request, reply) => {
 
 await app.register(fastifyStatic, { root: env.musicStorageDir, prefix: SIGNED_PREFIX, decorateReply: false })
 
-app.setErrorHandler((error, _request, reply) => {
+app.setErrorHandler((error, request, reply) => {
+  // Echoed back so a venue's own agent.log line ("vk-3f9a… failed") can be
+  // matched to what the cloud saw for that same request. The agent sends
+  // `X-Request-Id: vk-<hex>` on every call; nothing else links the two
+  // sides, since there is no inbound path to a venue to ask it anything.
+  // Omitted entirely rather than sent as null when the caller didn't
+  // supply one — browsers don't, and an always-null field reads like a bug.
+  const rid = request.headers["x-request-id"]
+  const requestId = typeof rid === "string" && rid ? { requestId: rid.slice(0, 200) } : {}
+
   if (error instanceof HttpError) {
-    return reply.status(error.status).send({ status: error.status, code: error.code, message: error.message })
+    return reply.status(error.status).send({ status: error.status, code: error.code, message: error.message, ...requestId })
   }
   // Fastify validation errors, rate-limit rejections, etc.
   const raw = error as { statusCode?: number; code?: string; message?: string }
@@ -147,7 +163,7 @@ app.setErrorHandler((error, _request, reply) => {
   // Only 5xx is genuinely our fault; logging every 4xx at error level put
   // client mistakes (a bad password, a rate-limited poll) in the same bucket
   // as real faults.
-  if (status >= 500) app.log.error(error)
+  if (status >= 500) app.log.error({ err: error, ...requestId }, "request failed")
 
   // Preserve a caller-meaningful code when the error carries one — a
   // rate-limit rejection reported itself as INTERNAL_ERROR before this,
@@ -156,14 +172,18 @@ app.setErrorHandler((error, _request, reply) => {
   const carried = typeof raw.code === "string" && !raw.code.startsWith("FST_") ? raw.code : null
   const code = carried ?? (status >= 500 ? "INTERNAL_ERROR" : "BAD_REQUEST")
   const message = status < 500 ? (raw.message ?? "Request failed.") : "Internal server error."
-  return reply.status(status).send({ status, code, message })
+  return reply.status(status).send({ status, code, message, ...requestId })
 })
 
 // Liveness: is the process up. Deliberately cheap and dependency-free —
 // `commit` is baked in at image build time (see Dockerfile's GIT_COMMIT
 // build arg) so "is production actually running my fix" is answerable by
 // looking, instead of manually diffing `git log` against `docker inspect`.
-app.get("/health", async () => ({ ok: true, commit: process.env.GIT_COMMIT ?? "unknown" }))
+const healthHandler = async () => ({ ok: true, commit: process.env.GIT_COMMIT ?? "unknown" })
+app.get("/health", healthHandler)
+// Alias: GET /api/health 404'd, and it's the first thing anyone debugging a
+// venue tries — everything else agent-facing lives under /api.
+app.get("/api/health", healthHandler)
 
 // Readiness: can this instance actually serve. /health returned ok while
 // Postgres was down, so the container reported healthy when every request

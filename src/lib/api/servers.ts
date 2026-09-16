@@ -79,6 +79,9 @@ export const serversApi = {
         locationId: input.locationId,
         status: "UNKNOWN",
         version: "—",
+        // Nothing has paired yet, so there is no reported version to judge.
+        minSupportedAgentVersion: null,
+        agentVersionStatus: "unknown",
         pairingCode: generatePairingCode(),
         pairedAt: null,
         lastHeartbeatAt: null,

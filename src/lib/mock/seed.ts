@@ -15,6 +15,10 @@ import type {
 } from "@/lib/api/types"
 import { nextId } from "@/lib/mock/ids"
 import { GENRES } from "@/lib/constants"
+import { agentVersionStatus } from "@/lib/version"
+
+/** Stands in for the backend's MIN_SUPPORTED_AGENT_VERSION in mock mode. */
+const MOCK_MIN_AGENT_VERSION = "3.4.0"
 
 const HOUR = 3600 * 1000
 const DAY = 24 * HOUR
@@ -260,6 +264,12 @@ export const servers: MusicServer[] = serverSpecs.map((spec) => {
     locationId: location.id,
     status: spec.status,
     version: spec.version,
+    // Mock mode has no backend to read MIN_SUPPORTED_AGENT_VERSION from, so
+    // it demonstrates the fleet-policy UI against its own seeded versions —
+    // the two 3.3.x/3.2.x venues above come through flagged, which is the
+    // state the badge exists to make visible.
+    minSupportedAgentVersion: MOCK_MIN_AGENT_VERSION,
+    agentVersionStatus: agentVersionStatus(spec.version, MOCK_MIN_AGENT_VERSION),
     pairingCode: null,
     pairedAt: isoDaysAgo(rand(30, 300)),
     lastHeartbeatAt: spec.heartbeatMinsAgo === null ? null : isoMinutesAgo(spec.heartbeatMinsAgo),

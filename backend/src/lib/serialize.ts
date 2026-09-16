@@ -20,6 +20,8 @@ import type {
   Alert as DbAlert,
   PrayerConfig as DbPrayerConfig,
 } from "@prisma/client"
+import { env } from "./env.js"
+import { agentVersionStatus } from "./version.js"
 
 export function toUser(u: DbUser) {
   return {
@@ -76,6 +78,15 @@ export function toMusicServer(s: DbMusicServer, zoneCount: number, pendingSyncJo
     locationId: s.locationId,
     status: s.status,
     version: s.version ?? "—",
+    // Visibility only — there is no self-update path on the venue side, so
+    // this cannot be enforced, only surfaced. Null minSupportedAgentVersion
+    // (unset MIN_SUPPORTED_AGENT_VERSION) means no fleet policy is active,
+    // which reports as "unknown" rather than quietly passing everything.
+    minSupportedAgentVersion: env.minSupportedAgentVersion,
+    // The raw string is carried in `version` above, unmodified, so support
+    // can read exactly what the venue reported — including shapes this
+    // comparison cannot parse.
+    agentVersionStatus: agentVersionStatus(s.version, env.minSupportedAgentVersion),
     pairingCode: s.pairingCode,
     pairedAt: s.pairedAt ? s.pairedAt.toISOString() : null,
     lastHeartbeatAt: s.lastHeartbeatAt ? s.lastHeartbeatAt.toISOString() : null,

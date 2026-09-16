@@ -444,18 +444,43 @@ function nowHHMM() {
 
 /**
  * The winning schedule per localZoneId, right now. A slot competes only
- * when today is one of its `days` and the current time falls in
- * [startTime, endTime); among competitors for the same zone (two
- * overlapping slots), the higher `priority` wins.
+ * when the current time falls inside [startTime, endTime) on one of its
+ * `days`; among competitors for the same zone (two overlapping slots), the
+ * higher `priority` wins.
+ *
+ * A slot whose endTime is *earlier* than its startTime wraps past midnight
+ * — "22:00" to "02:00" is a late-night set, not a typo. Comparing
+ * "HH:MM" strings is chronological only within one day, so the old single
+ * test (`startTime <= now && now < endTime`) could never be true for such a
+ * slot at any instant: at 23:30 the second half fails, at 01:00 the first
+ * does. Every overnight schedule silently never played, and nothing on
+ * either side rejects one — the portal saves it and shows it as enabled.
+ *
+ * A wrapping slot's two halves fall on different calendar days, and that
+ * matters for the `days` test: the evening half runs on the day the
+ * operator actually picked, while the early-morning half is the tail of the
+ * *previous* day's slot. So the morning half is matched against yesterday —
+ * otherwise a MON 22:00-02:00 slot would also play during Monday's own
+ * small hours, which is Sunday night's slot, not Monday's.
+ *
+ * Equal start and end times are left alone deliberately: they stay in the
+ * non-wrapping branch and never match, exactly as before.
  */
 function activeScheduleWinners(schedules) {
+  const now = new Date();
   const hhmm = nowHHMM();
-  const today = DAY_ABBREVIATIONS[new Date().getDay()];
+  const today = DAY_ABBREVIATIONS[now.getDay()];
+  const yesterday = DAY_ABBREVIATIONS[(now.getDay() + 6) % 7];
   const winners = new Map();
   for (const s of schedules || []) {
     if (!s.localZoneId || !s.startTime || !s.endTime) continue;
-    if (!Array.isArray(s.days) || !s.days.includes(today)) continue;
-    if (!(s.startTime <= hhmm && hhmm < s.endTime)) continue;
+    if (!Array.isArray(s.days)) continue;
+    const wraps = s.endTime < s.startTime;
+    const active = wraps
+      ? (hhmm >= s.startTime && s.days.includes(today)) ||
+        (hhmm < s.endTime && s.days.includes(yesterday))
+      : hhmm >= s.startTime && hhmm < s.endTime && s.days.includes(today);
+    if (!active) continue;
     const current = winners.get(s.localZoneId);
     if (!current || (s.priority ?? 0) > (current.priority ?? 0)) winners.set(s.localZoneId, s);
   }

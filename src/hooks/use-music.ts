@@ -4,11 +4,32 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { musicApi, musicFoldersApi, type TrackFilters, type UpdateTrackInput } from "@/lib/api/music"
 import { toast } from "sonner"
 
+/**
+ * GET /music is paginated (100 by default). Several screens use this hook as
+ * a whole-library lookup table and then resolve ids against the result, so
+ * anything past the first page silently disappeared — an older track showed
+ * as missing rather than as an error. When no filters are given, ask for the
+ * maximum page the backend allows so that lookup is complete.
+ *
+ * Prefer useTracksByIds below whenever the exact ids are already known: it is
+ * correct at any library size, where this still has the backend's ceiling.
+ */
 export function useTracks(filters?: TrackFilters, options?: { enabled?: boolean }) {
+  const effective: TrackFilters = filters?.search || filters?.genre ? filters : { ...filters, limit: "500" }
   return useQuery({
-    queryKey: ["music", filters ?? {}],
-    queryFn: () => musicApi.list(filters),
+    queryKey: ["music", effective],
+    queryFn: () => musicApi.list(effective),
     enabled: options?.enabled ?? true,
+  })
+}
+
+/** Resolves exactly `ids`, regardless of how large the library is. */
+export function useTracksByIds(ids: string[] | undefined, options?: { enabled?: boolean }) {
+  const key = (ids ?? []).join(",")
+  return useQuery({
+    queryKey: ["music", "by-ids", key],
+    queryFn: () => musicApi.list({ ids: key }),
+    enabled: (options?.enabled ?? true) && key.length > 0,
   })
 }
 

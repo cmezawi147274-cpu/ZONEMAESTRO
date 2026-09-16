@@ -20,6 +20,7 @@ import type {
   AlertSeverity,
   RealtimeEventType,
 } from "@/lib/constants"
+import type { AgentVersionStatus } from "@/lib/version"
 
 export interface User {
   id: string
@@ -96,6 +97,15 @@ export interface MusicServer {
   locationId: string
   status: ServerStatus
   version: string
+  /** Fleet policy from the backend (MIN_SUPPORTED_AGENT_VERSION). Null when
+   * no minimum is configured, in which case nothing is ever flagged. */
+  minSupportedAgentVersion: string | null
+  /** Three-way, because "we cannot read this version" is not the same claim
+   * as "this version is fine". There is no self-update path on the venue
+   * side — a technician has to visit — so surfacing this is the only
+   * control that exists over an outdated fleet. The raw reported string is
+   * always in `version` above, unmodified, for support to read. */
+  agentVersionStatus: AgentVersionStatus
   pairingCode: string | null
   pairedAt: string | null
   lastHeartbeatAt: string | null

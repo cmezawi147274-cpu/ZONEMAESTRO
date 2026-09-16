@@ -7,6 +7,7 @@ import { PageHeader } from "@/components/common/page-header"
 import { EmptyState } from "@/components/common/empty-state"
 import { RoleGate } from "@/components/common/role-gate"
 import { ServerStatusBadge, VenueLocationBadge, type VenueLocationState } from "@/components/common/status-badge"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -220,7 +221,29 @@ export default function ServerDetailPage(props: PageProps<"/servers/[id]">) {
         <CardContent className="grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
           <div>
             <p className="text-muted-foreground">Version</p>
-            <p className="font-medium">{server.version}</p>
+            <p className="font-medium">
+              <span className="inline-flex items-center gap-1.5">
+                {server.version}
+                {server.agentVersionStatus === "outdated" && (
+                  <Badge variant="outline" className="border-amber-500/40 text-amber-600 dark:text-amber-500">
+                    Outdated
+                  </Badge>
+                )}
+                {server.agentVersionStatus === "unknown" && server.minSupportedAgentVersion && (
+                  <Badge variant="outline" className="text-muted-foreground">
+                    Unknown
+                  </Badge>
+                )}
+              </span>
+            </p>
+            {/* No self-update path exists on the venue side, so this is
+                advisory: it tells whoever is looking that a site visit is
+                needed, it cannot trigger anything remotely. The raw string
+                above is whatever the venue reported, unmodified — support
+                needs to read it even when it cannot be parsed. */}
+            {server.agentVersionStatus !== "current" && server.minSupportedAgentVersion && (
+              <p className="text-xs text-muted-foreground">Minimum supported: {server.minSupportedAgentVersion}</p>
+            )}
           </div>
           <div>
             <p className="text-muted-foreground">Operating System</p>

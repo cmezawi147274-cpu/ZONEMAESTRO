@@ -20,8 +20,7 @@ import {
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useCreateSchedule, useUpdateSchedule } from "@/hooks/use-schedules"
-import { useZones } from "@/hooks/use-zones"
-import { usePlaylists } from "@/hooks/use-playlists"
+import { useZones, useZonePlaylists } from "@/hooks/use-zones"
 import { DAYS_OF_WEEK, type DayOfWeek } from "@/lib/constants"
 import { cn } from "@/lib/utils"
 import type { Schedule } from "@/lib/api/types"
@@ -57,7 +56,6 @@ export function ScheduleFormDialog({
 }) {
   const [open, setOpen] = useState(false)
   const { data: zones } = useZones()
-  const { data: playlists } = usePlaylists()
   const create = useCreateSchedule()
   const update = useUpdateSchedule()
 
@@ -76,6 +74,15 @@ export function ScheduleFormDialog({
           enabled: true,
         },
   })
+
+  // The playlist picker offers only the playlists assigned to the zone this
+  // slot is for, never the whole library — same rule the zone card's picker
+  // already follows (see zonesApi.playlists / GET /zones/:id/playlists).
+  // The zone is either the locked `zoneId` prop (opened from a zone card) or
+  // whatever the operator just chose in the zone select above, so the list
+  // re-narrows when they change it.
+  const selectedZoneId = form.watch("zoneId")
+  const { data: playlists } = useZonePlaylists(selectedZoneId, { enabled: !!selectedZoneId })
 
   useEffect(() => {
     if (!open) return

@@ -18,6 +18,28 @@ const path = require("node:path");
 
 const ROOT = path.resolve(__dirname, "..");
 
+/**
+ * The version this agent reports to CMMP on pairing and every heartbeat,
+ * read from package.json so it cannot drift from the code actually running.
+ *
+ * It used to be the hardcoded string "0.2.0-bridge", which made the cloud's
+ * minimum-supported-version check useless twice over: every venue reported
+ * an identical value no matter what build it ran, and the `-bridge` suffix
+ * parsed as NaN, so no venue was ever flagged as outdated. Since there is no
+ * remote update path to a venue, that fleet view is the only visibility
+ * there is into which machines still need a site visit — it has to be real.
+ *
+ * Falls back to the old constant rather than throwing: an agent that cannot
+ * read its own package.json must still pair and play music.
+ */
+function readAgentVersion() {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
+    if (pkg && typeof pkg.version === "string" && pkg.version.trim()) return pkg.version.trim();
+  } catch {}
+  return "0.2.0-bridge";
+}
+
 function loadDotEnv(file) {
   if (!fs.existsSync(file)) return;
   for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
@@ -53,7 +75,7 @@ const env = {
   // Loopback by default: the panel has no authentication, so it must not
   // be reachable from the restaurant's LAN unless explicitly opted into.
   uiHost: process.env.LOCAL_UI_HOST || "127.0.0.1",
-  agentVersion: "0.2.0-bridge",
+  agentVersion: readAgentVersion(),
   // Auto Boot: state file and management script installed by SETUP onto
   // this machine (see venue kit Set-AutoBoot.ps1). The agent never writes
   // the JSON itself — it always shells out to the script, which is the one

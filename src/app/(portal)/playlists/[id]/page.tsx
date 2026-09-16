@@ -12,13 +12,15 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { AddTracksDialog } from "@/components/playlists/add-tracks-dialog"
 import { AssignPlaylistDialog } from "@/components/playlists/assign-playlist-dialog"
 import { usePlaylist, useUpdatePlaylistTracks, useRemoveTrackFromPlaylist } from "@/hooks/use-playlists"
-import { useTracks } from "@/hooks/use-music"
+import { useTracksByIds } from "@/hooks/use-music"
 import { formatDuration } from "@/lib/format"
 
 export default function PlaylistDetailPage(props: PageProps<"/playlists/[id]">) {
   const { id } = use(props.params)
   const { data: playlist, isLoading } = usePlaylist(id)
-  const { data: tracks } = useTracks()
+  // Resolve this playlist's own tracks by id — fetching the whole library
+  // and joining here dropped every track past the first page.
+  const { data: tracks } = useTracksByIds(playlist?.trackIds)
   const reorder = useUpdatePlaylistTracks()
   const removeTrack = useRemoveTrackFromPlaylist()
 

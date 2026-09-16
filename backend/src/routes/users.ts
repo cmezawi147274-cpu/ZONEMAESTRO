@@ -7,10 +7,21 @@ import { requireAuth, requireUser, type AuthUser } from "../lib/auth-context.js"
 import { can } from "../lib/rbac.js"
 import { badRequest, forbidden, notFound } from "../lib/http-error.js"
 import { audit } from "../lib/audit.js"
+import { sendNewUserInviteEmail } from "../lib/mailer.js"
 import type { Role } from "@prisma/client"
 
 /** Seniority, so a creator can never mint a peer or a superior. */
 const RANK: Record<Role, number> = { SUPER_ADMIN: 3, ORGANIZATION_ADMIN: 2, LOCATION_MANAGER: 1, VIEWER: 0 }
+
+/** Mirrors src/lib/constants.ts ROLE_LABELS — kept as its own copy here
+ * because the backend package's rootDir is `src` and cannot import the
+ * frontend's. Only used to word the invite email. */
+const ROLE_LABELS: Record<Role, string> = {
+  SUPER_ADMIN: "Super Admin",
+  ORGANIZATION_ADMIN: "Organization Admin",
+  LOCATION_MANAGER: "Location Manager",
+  VIEWER: "Viewer",
+}
 
 /** Roles that are bound to exactly one venue — a location is mandatory and
  * its organization, not anything the client sent, decides organizationId. */
@@ -123,6 +134,34 @@ export default async function usersRoutes(app: FastifyInstance) {
       data: { name, email: normalizedEmail, role, ...scope, passwordHash },
     })
     await audit(request, { action: "user.create", targetType: "User", targetId: created.id, summary: `Created ${created.email} as ${created.role}.`, metadata: { role: created.role, organizationId: created.organizationId, locationId: created.locationId } })
+
+    // Only the SUPER_ADMIN branch above sets a real, known password — every
+    // other actor's invite hashes a random value nobody was told (see the
+    // /users/:id/password doc comment). Mail is best-effort: a broken SMTP
+    // config must never fail the account creation that already happened.
+    if (actor.role === "SUPER_ADMIN" && requestedPassword) {
+      let venueName = "Zone Maestro"
+      if (created.locationId) {
+        const location = await prisma.location.findUnique({ where: { id: created.locationId } })
+        if (location) venueName = location.name
+      } else if (created.organizationId) {
+        const organization = await prisma.organization.findUnique({ where: { id: created.organizationId } })
+        if (organization) venueName = organization.name
+      }
+      // AuthUser (from the verified JWT) carries no display name, only
+      // id/email/role/scope — look the actor's own row up for one.
+      const actorRow = await prisma.user.findUnique({ where: { id: actor.id } })
+      const sent = await sendNewUserInviteEmail({
+        to: created.email,
+        name: created.name,
+        password: requestedPassword,
+        roleLabel: ROLE_LABELS[created.role],
+        venueName,
+        invitedBy: actorRow?.name ?? actor.email,
+      })
+      if (!sent) request.log.warn({ userId: created.id }, "invite email not sent (SMTP unconfigured or send failed)")
+    }
+
     return reply.status(201).send(toUser(created))
   })
 

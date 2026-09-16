@@ -1,0 +1,109 @@
+# Reverse proxy + automatic HTTPS (Let's Encrypt) for CMMP.
+#
+# Caddy is the only service with ports published to the internet (80/443,
+# see docker-compose.yml). `app` (3000) and `backend` (4000) are bound to
+# 127.0.0.1 only — reachable from the host for debugging, never directly
+# from outside.
+#
+# Routing:
+#   /media/music/*  -> backend:4000 directly. Signed audio download URLs
+#                      handed to Windows MusicServer agents (see
+#                      backend/src/lib/media-url.ts); never hit by the
+#                      browser, and not one of the paths Next.js rewrites.
+#   /health         -> backend:4000 directly. Ops liveness check
+#                      (GET /health -> {ok, commit}); mounted at the
+#                      backend's top level, not under /api, so it needs its
+#                      own rule rather than riding the /api rewrite.
+#   /socket.io/*    -> backend:4000 directly, NOT through app:3000. This is
+#                      the realtime WebSocket transport's actual path
+#                      (src/lib/realtime/client.ts connects with a
+#                      "/realtime" socket.io *namespace*, which rides the
+#                      default "/socket.io/" transport path). Next.js has a
+#                      rewrite for this path too, but src/lib/config.ts
+#                      documents that a Next.js rewrite cannot proxy a
+#                      WebSocket upgrade — routing this through app instead
+#                      of straight to backend silently breaks realtime the
+#                      same way it did before NEXT_PUBLIC_WS_URL was
+#                      pointed at the backend's own origin.
+#   everything else -> app:3000 (the portal; its own next.config.ts rewrite
+#                      forwards plain HTTP /api/* calls to the backend over
+#                      the Docker network).
+cloud.zonemaestro.com {
+	# Access logging — TEMPORARY, added to diagnose slow page loads.
+	#
+	# Caddy logs only errors by default, which is why a "the login page is
+	# slow" report could not be measured: there was no record of how long any
+	# real request actually took. This records one JSON line per request,
+	# including `duration`, so the slow request can be named instead of
+	# guessed at.
+	#
+	# Goes to stdout, so it lands in `docker logs cmmp-caddy-1` and is capped
+	# by the json-file driver already configured for this service in
+	# docker-compose.yml (10 MB x 3 files) — it cannot fill the disk.
+	#
+	# Remove this block once the slow load is diagnosed: these lines carry
+	# client IPs and every URL visited, which is more than routine operation
+	# needs to keep.
+	log {
+		output stdout
+		format json
+	}
+
+	# zstd first, gzip second: Caddy picks the best the client advertises and
+	# falls back to gzip for browsers that do not offer zstd (Safari, older
+	# Chrome/Firefox), so nothing loses compression. Brotli is deliberately
+	# absent — this image ships http.encoders.gzip and http.encoders.zstd
+	# only; its `br` support is http.precompressed.br, which serves
+	# pre-built .br files and cannot compress a response on the fly.
+	encode {
+		zstd best
+		gzip
+	}
+
+	# Security headers, applied to every response this site serves.
+	#
+	# Deliberately NOT set here, and why — both would break something:
+	#   Content-Security-Policy      Next.js hydration emits inline <script>
+	#                                and <style>, so a useful policy needs
+	#                                nonces threaded through the app first.
+	#                                Guessing one here is a white screen, not
+	#                                hardening.
+	#   Cross-Origin-Resource-Policy /media/music/* is fetched by the Windows
+	#                                venue agents, not only by this origin.
+	#                                CORP would cut the agents off from audio.
+	header {
+		# Force HTTPS for a year. No `preload` on purpose: that submits the
+		# domain to a list baked into browser binaries, which is slow and
+		# awkward to reverse if this host ever needs to serve plain HTTP.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
+		# The portal frames nothing (no <iframe> anywhere in src/) and must
+		# never be framed itself — the login form is the clickjacking target.
+		X-Frame-Options "DENY"
+
+		# Stop a browser second-guessing Content-Type, e.g. rendering an
+		# uploaded file as HTML.
+		X-Content-Type-Options "nosniff"
+
+		# Send the origin cross-site, never the full path: portal URLs carry
+		# organization and server ids.
+		Referrer-Policy "strict-origin-when-cross-origin"
+
+		# Nothing in src/ touches camera, microphone or geolocation, so
+		# denying them costs nothing today and stops a future dependency
+		# reaching for them quietly. Audio playback is unaffected.
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+
+		# Don't advertise the reverse proxy and its version.
+		-Server
+	}
+
+	@backend_direct path /media/music/* /socket.io/* /health
+	handle @backend_direct {
+		reverse_proxy backend:4000
+	}
+
+	handle {
+		reverse_proxy app:3000
+	}
+}
