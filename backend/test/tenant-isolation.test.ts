@@ -42,10 +42,12 @@ interface Fixture {
   orgB: string
   locA: string
   locB: string
+  locA2: string
   serverA: string
   serverB: string
   zoneA: string
   zoneB: string
+  zoneA2: string
   playlistA: string
   playlistShared: string
   trackA: string
@@ -54,6 +56,7 @@ interface Fixture {
   alertA: string
   tokenA: string
   tokenB: string
+  tokenLM: string
 }
 let f: Fixture
 
@@ -191,13 +194,35 @@ before(async () => {
   await prisma.musicFolder.create({ data: { id: id("fld-a"), name: "Folder A", organizationId: id("org-a") } })
   await prisma.alert.create({ data: { id: id("alert-a"), severity: "warning", title: "A alert", message: "m", serverId: id("srv-a") } })
 
+  // A second location inside org A, with its own zone, plus a
+  // LOCATION_MANAGER bound to loc-a — for asserting a Location Manager
+  // reaches only their own venue, not their whole organization.
+  await prisma.location.create({
+    data: { id: id("loc-a2"), organizationId: id("org-a"), name: "Venue A2", address: "2 Test St", city: "Testville", region: "TS", country: "TS", timezone: "UTC" },
+  })
+  await prisma.zone.create({
+    data: { id: id("zone-a2"), serverId: id("srv-a"), locationId: id("loc-a2"), name: "Zone A2", playbackState: "STOPPED" },
+  })
+  await prisma.user.create({
+    data: {
+      id: id("user-lm"),
+      name: "Location Manager A",
+      email: `${P}lm@test.local`,
+      role: "LOCATION_MANAGER",
+      organizationId: id("org-a"),
+      locationId: id("loc-a"),
+      passwordHash: hash,
+    },
+  })
+
   f = {
-    orgA: id("org-a"), orgB: id("org-b"), locA: id("loc-a"), locB: id("loc-b"),
-    serverA: id("srv-a"), serverB: id("srv-b"), zoneA: id("zone-a"), zoneB: id("zone-b"),
+    orgA: id("org-a"), orgB: id("org-b"), locA: id("loc-a"), locB: id("loc-b"), locA2: id("loc-a2"),
+    serverA: id("srv-a"), serverB: id("srv-b"), zoneA: id("zone-a"), zoneB: id("zone-b"), zoneA2: id("zone-a2"),
     playlistA: id("pl-a"), playlistShared: id("pl-shared"), trackA: id("trk-a"), trackShared: id("trk-shared"),
     folderA: id("fld-a"), alertA: id("alert-a"),
     tokenA: await login(`${P}a@test.local`),
     tokenB: await login(`${P}b@test.local`),
+    tokenLM: await login(`${P}lm@test.local`),
   }
 })
 
@@ -476,5 +501,35 @@ describe("zones", () => {
     } finally {
       await prisma.playlistAssignment.delete({ where: { id: stray.id } })
     }
+  })
+})
+
+/**
+ * LOCATION_MANAGER scoping. `lib/auth-context.ts`' schema comment always
+ * said this role is location-bound like VIEWER; `tenantScope()` only
+ * applied that to VIEWER, so a Location Manager silently read and
+ * commanded their whole organization rather than their own venue. Fixed
+ * to match the documented model — asserted here against a second location
+ * (loc-a2) inside org A, which is the case a same-organization check alone
+ * would miss.
+ */
+describe("LOCATION_MANAGER scoping", () => {
+  test("location manager sees their own zone", async () => {
+    assert.equal((await call(f.tokenLM, "GET", `/api/zones/${f.zoneA}`)).status, 200)
+  })
+
+  test("location manager cannot see a zone in a different location of the SAME organization", async () => {
+    assertNotFound(await call(f.tokenLM, "GET", `/api/zones/${f.zoneA2}`), "GET /zones/:id (foreign location, same org)")
+  })
+
+  test("the other location's zone is absent from the location manager's zone list", async () => {
+    const ids = ((await call(f.tokenLM, "GET", "/api/zones")).body as { id: string }[]).map((z) => z.id)
+    assert.ok(ids.includes(f.zoneA), "the location manager's own zone is missing from their list")
+    assert.ok(!ids.includes(f.zoneA2), "a zone from a different location in the same org leaked into the location manager's list")
+  })
+
+  test("location manager cannot point a zone in the other location at a playlist", async () => {
+    const r = await call(f.tokenLM, "POST", `/api/zones/${f.zoneA2}/playlist`, { playlistId: f.playlistA })
+    assertNotFound(r, "POST /zones/:id/playlist (foreign location, same org)")
   })
 })

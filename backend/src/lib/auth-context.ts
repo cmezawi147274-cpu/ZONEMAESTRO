@@ -14,8 +14,9 @@ export interface AuthUser {
 export interface TenantScope {
   isSuperAdmin: boolean
   organizationId: string | null
-  /** Set for roles bound to a single venue (VIEWER). When present it narrows
-   * the org scope further: reads and commands may only touch this location. */
+  /** Set for roles bound to a single venue (VIEWER, LOCATION_MANAGER). When
+   * present it narrows the org scope further: reads and commands may only
+   * touch this location. */
   locationId: string | null
 }
 
@@ -44,13 +45,18 @@ export async function requireAuth(request: FastifyRequest, _reply: FastifyReply)
   }
 }
 
+/** Roles bound to a single venue — reads and commands may only touch that
+ * location. Mirrors `routes/users.ts`' LOCATION_BOUND list, which already
+ * requires a locationId for both at creation time. */
+const LOCATION_BOUND_ROLES: ReadonlyArray<AuthUser["role"]> = ["VIEWER", "LOCATION_MANAGER"]
+
 export function tenantScope(request: FastifyRequest): TenantScope {
   const user = request.authUser
   if (!user) return { isSuperAdmin: false, organizationId: null, locationId: null }
   return {
     isSuperAdmin: user.role === "SUPER_ADMIN",
     organizationId: user.organizationId,
-    locationId: user.role === "VIEWER" ? user.locationId : null,
+    locationId: LOCATION_BOUND_ROLES.includes(user.role) ? user.locationId : null,
   }
 }
 
