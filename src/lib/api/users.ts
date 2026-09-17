@@ -3,6 +3,7 @@ import { apiClient } from "@/lib/api/client"
 import { delay } from "@/lib/mock/delay"
 import { store } from "@/lib/mock/store"
 import { nextId } from "@/lib/mock/ids"
+import { DEMO_PASSWORD } from "@/lib/mock/seed"
 import type { Role } from "@/lib/constants"
 import type { User } from "@/lib/api/types"
 
@@ -63,5 +64,28 @@ export const usersApi = {
       return
     }
     await apiClient.delete(`/users/${id}`)
+  },
+
+  /**
+   * Changing your own password requires the current one; a manager
+   * resetting a user in their scope (strictly below them in rank) may set
+   * it without — see backend/src/routes/users.ts POST /users/:id/password.
+   * Either path revokes every other live session for the target.
+   */
+  async setPassword(id: string, input: { currentPassword?: string; newPassword: string }): Promise<void> {
+    if (isMockMode) {
+      await delay(300)
+      const user = store.users.find((u) => u.id === id)
+      if (!user) throw new Error("User not found")
+      const email = user.email.trim().toLowerCase()
+      if (input.currentPassword !== undefined) {
+        const assigned = store.userPasswords[email]
+        const matches = input.currentPassword === DEMO_PASSWORD || (!!assigned && input.currentPassword === assigned)
+        if (!matches) throw new Error("Your current password is incorrect.")
+      }
+      store.userPasswords[email] = input.newPassword
+      return
+    }
+    await apiClient.post(`/users/${id}/password`, input)
   },
 }

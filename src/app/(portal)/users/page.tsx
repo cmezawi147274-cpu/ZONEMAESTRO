@@ -10,12 +10,20 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { InviteUserDialog } from "@/components/users/invite-user-dialog"
+import { EditUserDialog } from "@/components/users/edit-user-dialog"
+import { ResetPasswordDialog } from "@/components/users/reset-password-dialog"
 import { useUsers, useDeleteUser } from "@/hooks/use-users"
 import { useOrganizations } from "@/hooks/use-organizations"
 import { useLocations } from "@/hooks/use-locations"
 import { useAuth } from "@/hooks/use-auth"
-import { ROLE_LABELS } from "@/lib/constants"
+import { ROLES, ROLE_LABELS, type Role } from "@/lib/constants"
 import { formatRelativeTime, initials } from "@/lib/format"
+import type { User } from "@/lib/api/types"
+
+/** Mirrors backend/src/routes/users.ts RANK — client-side only for hiding
+ * actions this account isn't allowed to use; the backend enforces it
+ * regardless. */
+const RANK: Record<Role, number> = { SUPER_ADMIN: 3, ORGANIZATION_ADMIN: 2, LOCATION_MANAGER: 1, VIEWER: 0 }
 
 export default function UsersPage() {
   const { data: users, isLoading } = useUsers()
@@ -23,6 +31,15 @@ export default function UsersPage() {
   const { data: organizations } = useOrganizations({ enabled: can("org:read") })
   const { data: locations } = useLocations(undefined, { enabled: can("location:read") })
   const remove = useDeleteUser()
+
+  // Which roles the current actor may assign — never a peer, never a
+  // superior (same rule the invite dialog uses).
+  const assignableRoles = ROLES.filter((r) => {
+    if (currentUser?.role === "SUPER_ADMIN") return true
+    if (currentUser?.role === "ORGANIZATION_ADMIN") return r === "LOCATION_MANAGER" || r === "VIEWER"
+    return r === "VIEWER"
+  })
+  const canActOn = (target: User) => target.id !== currentUser?.id && (currentUser?.role === "SUPER_ADMIN" || RANK[target.role] < RANK[currentUser?.role ?? "VIEWER"])
 
   const orgName = (id: string | null) => (id ? organizations?.find((o) => o.id === id)?.name : "All organizations")
   const locationName = (id: string | null | undefined) =>
@@ -89,10 +106,14 @@ export default function UsersPage() {
                     <TableCell className="text-muted-foreground">{locationName(user.locationId)}</TableCell>
                     <TableCell className="text-muted-foreground">{formatRelativeTime(user.lastLoginAt)}</TableCell>
                     <TableCell className="text-right">
-                      {user.id !== currentUser?.id && (
-                        <Button variant="ghost" size="icon-sm" onClick={() => remove.mutate(user.id)}>
-                          <Trash2 className="size-3.5" />
-                        </Button>
+                      {canActOn(user) && (
+                        <div className="flex justify-end">
+                          <EditUserDialog user={user} assignableRoles={assignableRoles} />
+                          <ResetPasswordDialog user={user} />
+                          <Button variant="ghost" size="icon-sm" onClick={() => remove.mutate(user.id)}>
+                            <Trash2 className="size-3.5" />
+                          </Button>
+                        </div>
                       )}
                     </TableCell>
                   </TableRow>

@@ -34,6 +34,13 @@ export function useUpdateUser() {
   })
 }
 
+export function useSetUserPassword() {
+  return useMutation({
+    mutationFn: ({ id, ...input }: { id: string; currentPassword?: string; newPassword: string }) =>
+      usersApi.setPassword(id, input),
+  })
+}
+
 export function useDeleteUser() {
   const qc = useQueryClient()
   return useMutation({

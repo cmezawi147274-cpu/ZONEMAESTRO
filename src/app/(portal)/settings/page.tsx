@@ -1,15 +1,102 @@
 "use client"
 
+import { useState } from "react"
+import { zodResolver } from "@hookform/resolvers/zod"
+import { useForm } from "react-hook-form"
+import * as z from "zod"
+import { Loader2 } from "lucide-react"
+import { toast } from "sonner"
 import { PageHeader } from "@/components/common/page-header"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form"
 import { useAuth } from "@/hooks/use-auth"
+import { useSetUserPassword } from "@/hooks/use-users"
 import { useOrganization } from "@/hooks/use-organizations"
 import { isMockMode, env } from "@/lib/config"
 import { ROLE_LABELS } from "@/lib/constants"
 import { formatDateTime, initials } from "@/lib/format"
+
+const MIN_PASSWORD_LENGTH = 8
+const passwordSchema = z
+  .object({
+    currentPassword: z.string().min(1, "Required"),
+    newPassword: z.string().min(MIN_PASSWORD_LENGTH, `At least ${MIN_PASSWORD_LENGTH} characters`),
+    confirmPassword: z.string(),
+  })
+  .refine((v) => v.newPassword === v.confirmPassword, { message: "Passwords don't match", path: ["confirmPassword"] })
+type PasswordFormValues = z.infer<typeof passwordSchema>
+
+/** Self-service password change. Requires the current password (unlike a
+ * manager's reset of someone else) and, since the backend revokes every
+ * live refresh token for the target on either path — including this
+ * session's own — logs out and sends the user back to sign in with the
+ * new password rather than leaving a session that will fail its next
+ * silent refresh with no explanation. */
+function ChangePasswordCard() {
+  const { user, logout } = useAuth()
+  const setPassword = useSetUserPassword()
+  const [done, setDone] = useState(false)
+  const form = useForm<PasswordFormValues>({
+    resolver: zodResolver(passwordSchema),
+    defaultValues: { currentPassword: "", newPassword: "", confirmPassword: "" },
+  })
+
+  async function onSubmit(values: PasswordFormValues) {
+    try {
+      if (!user) throw new Error("Not signed in")
+      await setPassword.mutateAsync({ id: user.id, currentPassword: values.currentPassword, newPassword: values.newPassword })
+      setDone(true)
+      toast.success("Password changed. Please sign in again.")
+      await logout()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not change password")
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm font-medium">Change Password</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+            <FormField control={form.control} name="currentPassword" render={({ field }) => (
+              <FormItem>
+                <FormLabel>Current password</FormLabel>
+                <FormControl><Input type="password" autoComplete="current-password" {...field} /></FormControl>
+                <FormMessage />
+              </FormItem>
+            )} />
+            <FormField control={form.control} name="newPassword" render={({ field }) => (
+              <FormItem>
+                <FormLabel>New password</FormLabel>
+                <FormControl><Input type="password" autoComplete="new-password" placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`} {...field} /></FormControl>
+                <FormMessage />
+              </FormItem>
+            )} />
+            <FormField control={form.control} name="confirmPassword" render={({ field }) => (
+              <FormItem>
+                <FormLabel>Confirm new password</FormLabel>
+                <FormControl><Input type="password" autoComplete="new-password" {...field} /></FormControl>
+                <FormMessage />
+              </FormItem>
+            )} />
+            <Button type="submit" disabled={setPassword.isPending || done}>
+              {setPassword.isPending && <Loader2 className="size-4 animate-spin" />}
+              Change Password
+            </Button>
+          </form>
+        </Form>
+      </CardContent>
+    </Card>
+  )
+}
 
 export default function SettingsPage() {
   const { user } = useAuth()
@@ -37,6 +124,8 @@ export default function SettingsPage() {
           </div>
         </CardContent>
       </Card>
+
+      <ChangePasswordCard />
 
       <Card>
         <CardHeader>
