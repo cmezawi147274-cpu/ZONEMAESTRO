@@ -70,6 +70,10 @@ const env = {
   commandPollMs: Number(process.env.COMMAND_POLL_MS || 1500),
   trackSyncMs: Number(process.env.TRACK_SYNC_MS || 20000),
   defaultHeartbeatSec: Number(process.env.HEARTBEAT_INTERVAL_SECONDS || 15),
+  // Continuous playback: how often the agent checks whether a zone's track
+  // just ended so it can queue the next one itself. Local-only (127.0.0.1),
+  // so short is cheap — this is the ceiling on dead air between tracks.
+  playbackPollMs: Number(process.env.PLAYBACK_POLL_MS || 3000),
   // Control panel (the local Setup/Zones UI this agent serves itself).
   uiPort: Number(process.env.LOCAL_UI_PORT || 8899),
   // Loopback by default: the panel has no authentication, so it must not
@@ -113,6 +117,7 @@ const REQUIRED_ENV_KEYS = [
   "commandPollMs",
   "trackSyncMs",
   "defaultHeartbeatSec",
+  "playbackPollMs",
   "agentVersion",
   "autoBootConfigFile",
   "autoBootScript",

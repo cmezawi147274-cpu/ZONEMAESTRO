@@ -6,7 +6,8 @@
   "type": "commonjs",
   "main": "bridge.js",
   "scripts": {
-    "start": "node bridge.js"
+    "start": "node bridge.js",
+    "test": "node --test"
   },
   "engines": {
     "node": ">=18"

@@ -19,6 +19,7 @@ const { log } = require("./log");
 const cmmp = require("./cmmp");
 const local = require("./local-api");
 const hub = require("./hub");
+const shuffle = require("./shuffle");
 
 const status = {
   running: false,
@@ -31,6 +32,21 @@ const status = {
 };
 
 let timers = [];
+
+// ---------------------------------------------------------------------------
+// Continuous playback state
+//
+// zoneId -> true while this agent itself just stopped the zone on purpose
+// (an explicit STOP command, or applyZoneTrackList clearing an unassigned
+// zone's queue). Consumed by the very next advancePlaybackOnce() poll, so a
+// genuine end-of-track still advances normally but an operator's Stop is
+// never mistaken for one and auto-resumed.
+// ---------------------------------------------------------------------------
+const expectedStops = new Set();
+
+// zoneId -> whether the previous poll saw this zone actually playing.
+// advancePlaybackOnce() only ever fires on a PLAYING -> STOPPED edge.
+const wasPlaying = new Map();
 
 // ---------------------------------------------------------------------------
 // Heartbeat + zone sync
@@ -248,6 +264,12 @@ const HANDLERS = {
 async function readBackZoneState(zoneId) {
   const zone = await local.getZone(zoneId);
   if (!zone) return undefined;
+  // Keeps the shuffle bag's "what just played" pointer in sync whenever a
+  // command lands the zone on a specific track (PLAY/NEXT/PREVIOUS) — so
+  // advancePlaybackOnce() never immediately redraws the track an operator
+  // (or applyZoneTrackList) just chose by some other path. Harmless no-op
+  // for commands that don't change the track (PAUSE, volume, ...).
+  shuffle.notePlayed(zoneId, zone.currentTrackId);
   const cmmpTrackId = cmmpTrackIdOf(zone.currentTrackId);
   return {
     playbackState: local.toCmmpPlaybackState(zone.status),
@@ -390,6 +412,9 @@ async function executeCommand(cmd) {
 
   try {
     await handler(zoneId, payload);
+    // An operator's own Stop — advancePlaybackOnce() must not mistake the
+    // STOPPED it causes for a track that just ended and resume playback.
+    if (type === "STOP") expectedStops.add(zoneId);
     let zoneState;
     try {
       zoneState = await readBackZoneState(zoneId);
@@ -536,8 +561,14 @@ async function applyZoneTrackList(localZoneId, trackIds, excludedTrackIds) {
       const first = (await local.getZonePlaylist(localZoneId)).tracks[0];
       if (first && String(zone.status || "").toLowerCase() === "playing") {
         await local.playTrack(localZoneId, first.trackId);
+        // This bypasses readBackZoneState (no command is being acked here),
+        // so tell the shuffle bag directly — otherwise the first natural
+        // end-of-track after a reassignment could immediately redraw the
+        // very track this reassignment just started.
+        shuffle.notePlayed(localZoneId, first.trackId);
         log(`  zone ${localZoneId} moved onto its newly assigned playlist`);
       } else if (!first) {
+        expectedStops.add(localZoneId);
         await local.stop(localZoneId);
         log(`  zone ${localZoneId} stopped — nothing assigned to it any more`);
       }
@@ -575,6 +606,81 @@ async function syncZonePlaylistsOnce() {
     // Neither a winning schedule nor a cloud-assigned playlist: nothing to
     // reconcile, same as the original "continue" — this zone's local
     // queue is not the cloud's to clear.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Continuous playback — the compiled MusicServer does not auto-advance its
+// own queue: a zone goes idle when a track ends instead of starting the
+// next one, so without this every playlist needed a human on NEXT after
+// every single song.
+//
+// One interval for the whole process, never per zone: each tick is one
+// cheap local GET (127.0.0.1) per zone, and only a zone whose track just
+// ended (a PLAYING -> STOPPED edge this agent did not itself cause — see
+// `expectedStops`) does any further work. No cloud call is made here; the
+// cloud learns the new current track on the next regular heartbeat/zone
+// sync, same as any other locally-driven playback change.
+//
+// Draws from shuffle.js's per-zone shuffle bag rather than sequential
+// order, so an auto-advanced pass matches the shuffle the cloud already
+// randomises the queue *build* order with, instead of playing the queue's
+// raw position order back-to-back.
+// ---------------------------------------------------------------------------
+
+async function advancePlaybackOnce() {
+  let zones;
+  try {
+    zones = await local.getZones();
+  } catch (err) {
+    log.warn("continuous playback poll failed:", err.message);
+    return;
+  }
+
+  const liveZoneIds = zones.map((z) => z.zoneId);
+  shuffle.prune(liveZoneIds);
+  const live = new Set(liveZoneIds);
+  for (const zoneId of expectedStops) if (!live.has(zoneId)) expectedStops.delete(zoneId);
+  for (const zoneId of wasPlaying.keys()) if (!live.has(zoneId)) wasPlaying.delete(zoneId);
+
+  for (const z of zones) {
+    const zoneId = z.zoneId;
+    const state = local.toCmmpPlaybackState(z.status);
+    const previouslyPlaying = wasPlaying.get(zoneId) === true;
+    wasPlaying.set(zoneId, state === "PLAYING");
+
+    if (state !== "STOPPED" || !previouslyPlaying) continue;
+    // Consume the flag regardless of outcome: an expected stop is expected
+    // exactly once, whether or not this zone even has a queue to advance.
+    if (expectedStops.delete(zoneId)) continue;
+
+    let queue;
+    try {
+      queue = (await local.getZonePlaylist(zoneId)).tracks;
+    } catch (err) {
+      log.warn(`  continuous playback: could not read zone ${zoneId}'s queue:`, err.message);
+      continue;
+    }
+    const trackIds = queue.map((t) => t.trackId);
+    if (trackIds.length < 2) continue; // nothing to advance to
+
+    // Bounded, not infinite: at most one attempt per track in the queue,
+    // so one broken file is skipped rather than wedging the zone, but a
+    // zone whose whole queue is broken still gives up rather than
+    // hammering the local API forever.
+    let advanced = false;
+    for (let attempt = 0; attempt < trackIds.length && !advanced; attempt++) {
+      const candidate = shuffle.nextTrackId(zoneId, trackIds);
+      if (!candidate) break;
+      try {
+        await local.playTrack(zoneId, candidate);
+        log(`  zone ${zoneId} auto-advanced to the next track`);
+        advanced = true;
+      } catch (err) {
+        log.warn(`  zone ${zoneId} could not play the next track, skipping it:`, err.message);
+      }
+    }
+    if (!advanced) log.warn(`  zone ${zoneId}: no track in its queue would play — left stopped.`);
   }
 }
 
@@ -729,9 +835,13 @@ async function start() {
   // Independent of track sync, so assigning a playlist made of already
   // cached tracks doesn't wait on a new download to be pushed.
   timers.push(setInterval(tick(syncZonePlaylistsOnce, "zone playlist sync"), env.trackSyncMs));
+  // One interval for the whole process (never per zone) — see the
+  // "Continuous playback" section above for why this is safe to run this
+  // often: a no-op tick is a single local GET.
+  timers.push(setInterval(tick(advancePlaybackOnce, "continuous playback"), env.playbackPollMs));
 
   log(
-    `Running. Heartbeat every ${heartbeatMs / 1000}s, command poll every ${env.commandPollMs / 1000}s, track sync every ${env.trackSyncMs / 1000}s.`
+    `Running. Heartbeat every ${heartbeatMs / 1000}s, command poll every ${env.commandPollMs / 1000}s, track sync every ${env.trackSyncMs / 1000}s, playback poll every ${env.playbackPollMs / 1000}s.`
   );
 }
 
@@ -743,5 +853,6 @@ module.exports = {
   pollCommandsOnce,
   syncTracksOnce,
   syncZonePlaylistsOnce,
+  advancePlaybackOnce,
   executeCommand,
 };

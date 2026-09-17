@@ -173,12 +173,9 @@ before(async () => {
   await prisma.zone.create({
     data: { id: id("zone-a"), serverId: id("srv-a"), locationId: id("loc-a"), name: "Zone A", playbackState: "STOPPED" },
   })
-  // ONLINE so POST /zones/:id/playlist reaches the tenant check under test
-  // instead of short-circuiting on the "server offline" guard.
   await prisma.zone.create({
     data: { id: id("zone-b"), serverId: id("srv-b"), locationId: id("loc-b"), name: "Zone B", playbackState: "STOPPED" },
   })
-  await prisma.musicServer.update({ where: { id: id("srv-b") }, data: { status: "ONLINE" } })
   await prisma.playlist.create({ data: { id: id("pl-a"), name: "Playlist A", organizationId: id("org-a") } })
   // organizationId null = the shared catalogue: both tenants may see and
   // assign it, but only SUPER_ADMIN may mutate it.
@@ -483,6 +480,15 @@ describe("zones", () => {
   })
 
   test("B cannot point B's own zone at A's (foreign) playlist", async () => {
+    // Set ONLINE immediately before the call, not in before(): the backend's
+    // own agent-heartbeat sweep (lib/agent-sweep.ts) flips any ONLINE server
+    // with no live agent-registry entry back to OFFLINE on its own ~15s
+    // timer, and this fixture server never has one. Setting it long ago in
+    // before() raced that sweep — flaky only when the suite ran slowly
+    // enough for a sweep tick to land in between (e.g. behind
+    // security-surface.test.ts's rate-limit probe). Right before the call,
+    // the race window is milliseconds, not tens of seconds.
+    await prisma.musicServer.update({ where: { id: f.serverB }, data: { status: "ONLINE" } })
     const r = await call(f.tokenB, "POST", `/api/zones/${f.zoneB}/playlist`, { playlistId: f.playlistA })
     assertNotFound(r, "POST /zones/:id/playlist with a foreign playlist")
     const zone = await prisma.zone.findUnique({ where: { id: f.zoneB } })
