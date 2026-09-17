@@ -94,7 +94,12 @@ export default async function zonesRoutes(app: FastifyInstance) {
 
   app.patch<{ Params: { id: string }; Body: { prayerModeEnabled?: boolean } }>("/zones/:id", async (request, reply) => {
     const user = requireUser(request)
-    if (!can(user.role, "prayer:read")) throw forbidden()
+    // Writing prayerModeEnabled is a mutation — "prayer:manage", not
+    // "prayer:read". LOCATION_MANAGER holds only the latter (the UI
+    // already hides this switch for them), so this was a silent privilege
+    // escalation: a Location Manager could toggle Prayer Mode by calling
+    // the API directly even though the portal never offers the control.
+    if (!can(user.role, "prayer:manage")) throw forbidden()
     const target = await scopedZone(tenantScope(request), request.params.id)
     const zone = await prisma.zone.update({
       where: { id: target.id },

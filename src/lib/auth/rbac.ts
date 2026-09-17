@@ -72,10 +72,11 @@ const MATRIX: Record<Role, Permission[]> = {
     "prayer:read",
     "prayer:manage",
   ],
-  // Music library access is SUPER_ADMIN-only: "music:read"/"music:upload"/
-  // "music:delete" are deliberately absent below for every other role. Kept
-  // in lockstep with backend/src/lib/rbac.ts, which is the authoritative
-  // enforcement — this copy only controls what the UI shows.
+  // "music:upload"/"music:delete" are SUPER_ADMIN-only, but "music:read" is
+  // not: a playlist can't render its track titles without it (a role
+  // holding "playlist:read" must be able to resolve the tracks inside a
+  // playlist). Kept in lockstep with backend/src/lib/rbac.ts, which is the
+  // authoritative enforcement — this copy only controls what the UI shows.
   ORGANIZATION_ADMIN: [
     "org:read",
     "location:read",
@@ -87,6 +88,7 @@ const MATRIX: Record<Role, Permission[]> = {
     "zone:read",
     "zone:control",
     "zone:assign",
+    "music:read",
     "playlist:read",
     "playlist:write",
     "schedule:read",
@@ -104,6 +106,7 @@ const MATRIX: Record<Role, Permission[]> = {
     "zone:read",
     "zone:control",
     "zone:assign",
+    "music:read",
     "playlist:read",
     "schedule:read",
     "schedule:write",
