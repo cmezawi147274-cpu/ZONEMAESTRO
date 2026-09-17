@@ -7,6 +7,7 @@ import { forbidden, notFound, badRequest } from "../lib/http-error.js"
 import { queuePlaylistTracksForServer } from "../lib/zone-effects.js"
 import { pushToAgent } from "../lib/agent-registry.js"
 import { pushActivity } from "../lib/activity.js"
+import { scopedPlaylist, libraryReadWhere } from "../lib/tenant.js"
 
 async function allowedLocationIds(organizationId: string) {
   const locs = await prisma.location.findMany({ where: { organizationId }, select: { id: true } })
@@ -72,12 +73,16 @@ export default async function zonesRoutes(app: FastifyInstance) {
   app.get<{ Params: { id: string } }>("/zones/:id/playlists", async (request, reply) => {
     const user = requireUser(request)
     if (!can(user.role, "zone:read")) throw forbidden()
-    const zone = await scopedZone(tenantScope(request), request.params.id)
+    const scope = tenantScope(request)
+    const zone = await scopedZone(scope, request.params.id)
     const assignments = await prisma.playlistAssignment.findMany({ where: { targetType: "ZONE", targetId: zone.id } })
     const ids = new Set(assignments.map((a) => a.playlistId))
     if (zone.currentPlaylistId) ids.add(zone.currentPlaylistId)
     if (ids.size === 0) return reply.send([])
-    const playlists = await prisma.playlist.findMany({ where: { id: { in: Array.from(ids) } }, orderBy: { name: "asc" } })
+    const playlists = await prisma.playlist.findMany({
+      where: { AND: [{ id: { in: Array.from(ids) } }, libraryReadWhere(scope)] },
+      orderBy: { name: "asc" },
+    })
     const items = await Promise.all(
       playlists.map(async (p) => {
         const tracks = await prisma.playlistTrack.findMany({ where: { playlistId: p.id }, orderBy: { position: "asc" } })
@@ -101,22 +106,21 @@ export default async function zonesRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string }; Body: { playlistId: string } }>("/zones/:id/playlist", async (request, reply) => {
     const user = requireUser(request)
     if (!can(user.role, "zone:assign")) throw forbidden()
-    const zone = await scopedZone(tenantScope(request), request.params.id)
+    const scope = tenantScope(request)
+    const zone = await scopedZone(scope, request.params.id)
     const server = await prisma.musicServer.findUnique({ where: { id: zone.serverId } })
     if (!server || server.status === "OFFLINE" || server.status === "UNKNOWN") {
       throw badRequest(`${server?.name ?? "Server"} is offline — playlist not assigned.`)
     }
-    const playlist = await prisma.playlist.findUnique({
-      where: { id: request.body.playlistId },
-      include: { tracks: { orderBy: { position: "asc" } } },
-    })
-    const excludedTrackIds = zone.currentPlaylistId !== request.body.playlistId ? [] : zone.excludedTrackIds
-    const firstTrack = playlist?.tracks.find((t) => !excludedTrackIds.includes(t.trackId))?.trackId ?? null
+    const playlist = await scopedPlaylist(scope, request.body.playlistId)
+    const tracks = await prisma.playlistTrack.findMany({ where: { playlistId: playlist.id }, orderBy: { position: "asc" } })
+    const excludedTrackIds = zone.currentPlaylistId !== playlist.id ? [] : zone.excludedTrackIds
+    const firstTrack = tracks.find((t) => !excludedTrackIds.includes(t.trackId))?.trackId ?? null
     const updated = await prisma.zone.update({
       where: { id: zone.id },
-      data: { currentPlaylistId: request.body.playlistId, currentTrackId: firstTrack, excludedTrackIds },
+      data: { currentPlaylistId: playlist.id, currentTrackId: firstTrack, excludedTrackIds },
     })
-    await queuePlaylistTracksForServer(request.body.playlistId, zone.serverId)
+    await queuePlaylistTracksForServer(playlist.id, zone.serverId)
     return reply.send(toZone(updated))
   })
 

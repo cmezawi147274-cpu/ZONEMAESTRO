@@ -45,7 +45,9 @@ interface Fixture {
   serverA: string
   serverB: string
   zoneA: string
+  zoneB: string
   playlistA: string
+  playlistShared: string
   trackA: string
   trackShared: string
   folderA: string
@@ -168,7 +170,16 @@ before(async () => {
   await prisma.zone.create({
     data: { id: id("zone-a"), serverId: id("srv-a"), locationId: id("loc-a"), name: "Zone A", playbackState: "STOPPED" },
   })
+  // ONLINE so POST /zones/:id/playlist reaches the tenant check under test
+  // instead of short-circuiting on the "server offline" guard.
+  await prisma.zone.create({
+    data: { id: id("zone-b"), serverId: id("srv-b"), locationId: id("loc-b"), name: "Zone B", playbackState: "STOPPED" },
+  })
+  await prisma.musicServer.update({ where: { id: id("srv-b") }, data: { status: "ONLINE" } })
   await prisma.playlist.create({ data: { id: id("pl-a"), name: "Playlist A", organizationId: id("org-a") } })
+  // organizationId null = the shared catalogue: both tenants may see and
+  // assign it, but only SUPER_ADMIN may mutate it.
+  await prisma.playlist.create({ data: { id: id("pl-shared"), name: "Playlist Shared", organizationId: null } })
   await prisma.track.create({
     data: { id: id("trk-a"), title: "Track A", artist: "A", album: "A", genre: "Pop", durationSec: 10, fileSizeMb: 1, storageKey: id("a.mp3"), uploadedById: id("user-a"), organizationId: id("org-a") },
   })
@@ -182,8 +193,8 @@ before(async () => {
 
   f = {
     orgA: id("org-a"), orgB: id("org-b"), locA: id("loc-a"), locB: id("loc-b"),
-    serverA: id("srv-a"), serverB: id("srv-b"), zoneA: id("zone-a"),
-    playlistA: id("pl-a"), trackA: id("trk-a"), trackShared: id("trk-shared"),
+    serverA: id("srv-a"), serverB: id("srv-b"), zoneA: id("zone-a"), zoneB: id("zone-b"),
+    playlistA: id("pl-a"), playlistShared: id("pl-shared"), trackA: id("trk-a"), trackShared: id("trk-shared"),
     folderA: id("fld-a"), alertA: id("alert-a"),
     tokenA: await login(`${P}a@test.local`),
     tokenB: await login(`${P}b@test.local`),
@@ -369,10 +380,101 @@ describe("monitoring", () => {
   })
 })
 
+/**
+ * Playlists — the live cross-tenant hole. PATCH and DELETE had no ownership
+ * check at all (any ORGANIZATION_ADMIN could rename, retrack or delete any
+ * playlist on the platform by id), assign trusted playlist/target/type
+ * unvalidated, and Zone 3 in production ended up with a foreign org's
+ * playlist as its currentPlaylistId because POST /zones/:id/playlist did a
+ * bare findUnique with no scope check.
+ */
+describe("playlists", () => {
+  test("B cannot read A's playlist", async () => assertNotFound(await call(f.tokenB, "GET", `/api/playlists/${f.playlistA}`), "GET /playlists/:id"))
+
+  test("A's playlist is absent from B's list", async () => {
+    const ids = ((await call(f.tokenB, "GET", "/api/playlists")).body as { id: string }[]).map((p) => p.id)
+    assert.ok(!ids.includes(f.playlistA), "A's playlist leaked into B's list")
+  })
+
+  test("B cannot rename A's playlist", async () => {
+    assertNotFound(await call(f.tokenB, "PATCH", `/api/playlists/${f.playlistA}`, { name: "pwned" }), "PATCH /playlists/:id")
+    const playlist = await prisma.playlist.findUnique({ where: { id: f.playlistA } })
+    assert.equal(playlist?.name, "Playlist A", "another tenant renamed this playlist")
+  })
+
+  test("B cannot delete A's playlist", async () => {
+    assertNotFound(await call(f.tokenB, "DELETE", `/api/playlists/${f.playlistA}`), "DELETE /playlists/:id")
+    assert.ok(await prisma.playlist.findUnique({ where: { id: f.playlistA } }), "A's playlist was deleted by another tenant")
+  })
+
+  test("B cannot add a track to A's playlist", async () => {
+    assertNotFound(await call(f.tokenB, "POST", `/api/playlists/${f.playlistA}/tracks`, { trackId: f.trackShared }), "POST /playlists/:id/tracks")
+  })
+
+  test("B cannot remove a track from A's playlist", async () => {
+    assertNotFound(await call(f.tokenB, "DELETE", `/api/playlists/${f.playlistA}/tracks/${f.trackA}`), "DELETE /playlists/:id/tracks/:trackId")
+  })
+
+  test("B cannot duplicate A's playlist", async () => assertNotFound(await call(f.tokenB, "POST", `/api/playlists/${f.playlistA}/duplicate`), "POST /playlists/:id/duplicate"))
+
+  test("B cannot assign A's (foreign) playlist to B's own zone", async () => {
+    const r = await call(f.tokenB, "POST", `/api/playlists/${f.playlistA}/assign`, { targetType: "ZONE", targetId: f.zoneB })
+    assertNotFound(r, "POST /playlists/:id/assign with a foreign playlist")
+    const zone = await prisma.zone.findUnique({ where: { id: f.zoneB } })
+    assert.notEqual(zone?.currentPlaylistId, f.playlistA, "a foreign playlist was assigned to the zone despite the rejection")
+  })
+
+  test("A cannot assign their own playlist onto B's (foreign) zone", async () => {
+    const r = await call(f.tokenA, "POST", `/api/playlists/${f.playlistA}/assign`, { targetType: "ZONE", targetId: f.zoneB })
+    assertNotFound(r, "POST /playlists/:id/assign onto a foreign zone")
+  })
+
+  test("shared catalogue is readable and assignable by both tenants, but mutable by neither", async () => {
+    assert.equal((await call(f.tokenA, "GET", `/api/playlists/${f.playlistShared}`)).status, 200)
+    assert.equal((await call(f.tokenB, "GET", `/api/playlists/${f.playlistShared}`)).status, 200)
+    assertNotFound(await call(f.tokenA, "PATCH", `/api/playlists/${f.playlistShared}`, { name: "pwned" }), "PATCH shared playlist")
+    assertNotFound(await call(f.tokenB, "DELETE", `/api/playlists/${f.playlistShared}`), "DELETE shared playlist")
+  })
+
+  test("a non-super-admin cannot forge organizationId on create (mass assignment)", async () => {
+    const r = await call(f.tokenB, "POST", "/api/playlists", { name: "zztest-forged", description: "", organizationId: f.orgA })
+    assert.equal(r.status, 201)
+    const body = r.body as { id: string; organizationId: string | null }
+    assert.equal(body.organizationId, f.orgB, "a non-super-admin's forged organizationId in the request body was honored")
+    await prisma.playlist.delete({ where: { id: body.id } })
+  })
+
+  test("owner still has full read/write access to their own playlist", async () => {
+    assert.equal((await call(f.tokenA, "GET", `/api/playlists/${f.playlistA}`)).status, 200)
+    assert.equal((await call(f.tokenA, "PATCH", `/api/playlists/${f.playlistA}`, { description: "updated" })).status, 200)
+  })
+})
+
 describe("zones", () => {
   test("B cannot read A's zone", async () => assertNotFound(await call(f.tokenB, "GET", `/api/zones/${f.zoneA}`), "GET /zones/:id"))
   test("A's zone is absent from B's list", async () => {
     const ids = ((await call(f.tokenB, "GET", "/api/zones")).body as { id: string }[]).map((z) => z.id)
     assert.ok(!ids.includes(f.zoneA), "A's zone leaked into B's list")
+  })
+
+  test("B cannot point B's own zone at A's (foreign) playlist", async () => {
+    const r = await call(f.tokenB, "POST", `/api/zones/${f.zoneB}/playlist`, { playlistId: f.playlistA })
+    assertNotFound(r, "POST /zones/:id/playlist with a foreign playlist")
+    const zone = await prisma.zone.findUnique({ where: { id: f.zoneB } })
+    assert.notEqual(zone?.currentPlaylistId, f.playlistA, "the live Zone 3 bug: a foreign playlist was assigned via POST /zones/:id/playlist")
+  })
+
+  test("a stale/legacy PlaylistAssignment row never leaks a foreign playlist through the zone picker", async () => {
+    // targetId is deliberately not a foreign key — simulate the 20 orphaned/
+    // cross-tenant rows already found live by writing one directly.
+    const stray = await prisma.playlistAssignment.create({ data: { playlistId: f.playlistA, targetType: "ZONE", targetId: f.zoneB } })
+    try {
+      const r = await call(f.tokenB, "GET", `/api/zones/${f.zoneB}/playlists`)
+      assert.equal(r.status, 200)
+      const ids = (r.body as { id: string }[]).map((p) => p.id)
+      assert.ok(!ids.includes(f.playlistA), "GET /zones/:id/playlists leaked a foreign playlist through a stale assignment row")
+    } finally {
+      await prisma.playlistAssignment.delete({ where: { id: stray.id } })
+    }
   })
 })

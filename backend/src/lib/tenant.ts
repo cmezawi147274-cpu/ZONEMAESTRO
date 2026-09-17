@@ -27,6 +27,7 @@
 import { prisma } from "./db.js"
 import type { TenantScope } from "./auth-context.js"
 import { notFound, forbidden } from "./http-error.js"
+import type { PlaylistTargetType } from "@prisma/client"
 
 /**
  * Prisma `where` fragment limiting a library resource to what this caller
@@ -112,6 +113,45 @@ export async function scopedPlaylist(scope: TenantScope, playlistId: string) {
     throw notFound("Playlist")
   }
   return playlist
+}
+
+/**
+ * Validates a `PlaylistAssignment` target the caller is entitled to reach,
+ * or 404s. `targetId` is not a foreign key (it can point at an
+ * Organization, Location, MusicServer or Zone depending on `targetType`),
+ * so `POST /playlists/:id/assign` cannot rely on a single loader the way
+ * the other `scoped*` helpers do — this dispatches per type and reuses the
+ * existing zone/server loaders where they exist.
+ */
+export async function scopedAssignmentTarget(scope: TenantScope, targetType: PlaylistTargetType, targetId: string) {
+  switch (targetType) {
+    case "ZONE":
+      await scopedZone(scope, targetId)
+      return
+    case "SERVER":
+      await scopedServer(scope, targetId)
+      return
+    case "ORGANIZATION": {
+      if (scope.isSuperAdmin) {
+        const org = await prisma.organization.findUnique({ where: { id: targetId } })
+        if (!org) throw notFound("Organization")
+        return
+      }
+      if (targetId !== scope.organizationId) throw notFound("Organization")
+      return
+    }
+    case "LOCATION": {
+      const loc = await prisma.location.findUnique({ where: { id: targetId } })
+      if (!loc) throw notFound("Location")
+      if (scope.isSuperAdmin) return
+      if (scope.locationId) {
+        if (loc.id !== scope.locationId) throw notFound("Location")
+        return
+      }
+      if (!scope.organizationId || loc.organizationId !== scope.organizationId) throw notFound("Location")
+      return
+    }
+  }
 }
 
 /**
