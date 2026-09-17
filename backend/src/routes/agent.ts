@@ -19,7 +19,7 @@ import { badRequest, notFound, HttpError } from "../lib/http-error.js"
 import { requireAgent, generateAgentToken, sha256Hex } from "../lib/agent-auth.js"
 import { hashPairingCode, normalizePairingCode, pairingReplayWindowMs, checkAndRecordLocationPairingAttempt } from "../lib/pairing.js"
 import { seededShuffle } from "../lib/shuffle.js"
-import { markAgentSeen, resolveAck, forgetAgent } from "../lib/agent-registry.js"
+import { markAgentSeen, resolveAck, forgetAgent, markZoneVolumeWritten, isZoneVolumeWriteFresh } from "../lib/agent-registry.js"
 import { emitEvent } from "../realtime.js"
 import { pushActivity } from "../lib/activity.js"
 import { MUSIC_SERVER_HUB_PATH } from "../agent/signalrHub.js"
@@ -430,7 +430,10 @@ export default async function agentRoutes(app: FastifyInstance) {
       const zoneState = zoneStateRaw as Record<string, unknown>
       const data: Record<string, unknown> = {}
       const volume = num(zoneState, "volume")
-      if (volume !== undefined) data.volume = volume
+      if (volume !== undefined) {
+        data.volume = volume
+        markZoneVolumeWritten(updated.zoneId)
+      }
       const muted = field(zoneState, "muted")
       if (typeof muted === "boolean") data.muted = muted
       const playbackState = str(zoneState, "playbackState")
@@ -607,10 +610,15 @@ export default async function agentRoutes(app: FastifyInstance) {
       const muted = typeof mutedVal === "boolean" ? mutedVal : undefined
 
       const existing = await prisma.zone.findUnique({ where: { serverId_localZoneId: { serverId: ctx.serverId, localZoneId } } })
+      // A routine heartbeat must not undo a volume a command just set —
+      // see agent-registry.ts#isZoneVolumeWriteFresh for why this race
+      // exists at all. Every other field this route reports is still
+      // trusted unconditionally; only volume gets this grace window.
+      const applyVolume = volume !== undefined && !(existing && isZoneVolumeWriteFresh(existing.id))
       const zone = existing
         ? await prisma.zone.update({
             where: { id: existing.id },
-            data: { name, ...(playbackState ? { playbackState } : {}), ...(volume !== undefined ? { volume } : {}), ...(muted !== undefined ? { muted } : {}) },
+            data: { name, ...(playbackState ? { playbackState } : {}), ...(applyVolume ? { volume } : {}), ...(muted !== undefined ? { muted } : {}) },
           })
         : await prisma.zone.create({
             data: {

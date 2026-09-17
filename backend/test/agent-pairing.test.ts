@@ -393,3 +393,99 @@ describe("pairing rate limiting", () => {
     assert.ok(sawLimit, "30 rapid pairing attempts against one location were never rate-limited")
   })
 })
+
+/**
+ * Volume write-wins grace window (lib/agent-registry.ts
+ * markZoneVolumeWritten/isZoneVolumeWriteFresh).
+ *
+ * POST /server/zones/sync fires on every heartbeat and unconditionally
+ * overwrote Zone.volume with whatever the agent reported — heartbeats run
+ * independently of commands, so if a SET_VOLUME ack landed and the very
+ * next heartbeat's snapshot was taken before (or the local write hadn't
+ * durably applied), the value a user just set got silently reverted
+ * within one heartbeat interval. Exercises both routes directly rather
+ * than the full POST /commands flow (which blocks on a real agent ack and
+ * needs a portal session) — these are exactly the two routes changed.
+ */
+/**
+ * Retries a pairing completion on 429 — this file's fixtures share one
+ * source IP with security-surface.test.ts's login-rate-limiting probe
+ * (deliberately 25 rapid failures) and tenant-isolation.test.ts's own
+ * login() helper already documents and retries the identical collision.
+ * A concurrently-running test file's burst landing mid-suite is not a
+ * pairing bug, so it is waited out rather than asserted against.
+ */
+async function completeWithRetry(code: string) {
+  const started = Date.now()
+  for (let attempt = 1; ; attempt++) {
+    const r = await complete(code)
+    // 75s, matching tenant-isolation.test.ts's login() budget for the
+    // identical collision — 30s was not long enough in practice.
+    if (r.status !== 429 || Date.now() - started > 75_000) return r
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+  }
+}
+
+describe("volume write-wins grace window", () => {
+  test("a heartbeat's zones/sync cannot revert a volume a command ack just set", async () => {
+    const { code, id: serverId } = await freshServer()
+    const paired = await completeWithRetry(code)
+    assert.equal(paired.status, 201, JSON.stringify(paired.body))
+    const token = paired.body.agentToken as string
+
+    // Establish the zone via a normal heartbeat report, same as production.
+    const seed = await fetch(`${API}/api/server/zones/sync`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ zones: [{ localZoneId: "zone-vol", name: "Volume Test Zone", playbackState: "PLAYING", volume: 50, muted: false }] }),
+    })
+    assert.equal(seed.status, 200, JSON.stringify(await seed.clone().json().catch(() => null)))
+    const zone = await prisma.zone.findFirstOrThrow({ where: { serverId, localZoneId: "zone-vol" } })
+
+    // A command result — the same write POST /server/commands/ack does
+    // for a real SET_VOLUME ack.
+    const command = await prisma.remoteCommand.create({
+      data: { id: `${P}cmd-${Date.now()}`, serverId, zoneId: zone.id, type: "SET_VOLUME", status: "PENDING", source: "USER", issuedById: `${P}test` },
+    })
+    const ack = await fetch(`${API}/api/server/commands/ack`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ commandId: command.id, status: "SUCCESS", zoneState: { volume: 77, playbackState: "PLAYING" } }),
+    })
+    assert.equal(ack.status, 200)
+    assert.equal((await prisma.zone.findUniqueOrThrow({ where: { id: zone.id } })).volume, 77, "the command ack did not set volume at all")
+
+    // The very next heartbeat, reporting the zone as if the local side
+    // still has (or reverted to) the pre-command value.
+    const sync = await fetch(`${API}/api/server/zones/sync`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ zones: [{ localZoneId: "zone-vol", name: "Volume Test Zone", playbackState: "PLAYING", volume: 50, muted: false }] }),
+    })
+    assert.equal(sync.status, 200)
+
+    const after = await prisma.zone.findUniqueOrThrow({ where: { id: zone.id } })
+    assert.equal(after.volume, 77, "a routine heartbeat reverted a volume the command ack just set")
+  })
+
+  test("without a recent command result, zones/sync still applies volume normally", async () => {
+    const { code, id: serverId } = await freshServer()
+    const paired = await completeWithRetry(code)
+    assert.equal(paired.status, 201, JSON.stringify(paired.body))
+    const token = paired.body.agentToken as string
+
+    await fetch(`${API}/api/server/zones/sync`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ zones: [{ localZoneId: "zone-vol-2", name: "Volume Test Zone 2", playbackState: "STOPPED", volume: 50, muted: false }] }),
+    })
+    await fetch(`${API}/api/server/zones/sync`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ zones: [{ localZoneId: "zone-vol-2", name: "Volume Test Zone 2", playbackState: "STOPPED", volume: 33, muted: false }] }),
+    })
+
+    const zone = await prisma.zone.findFirstOrThrow({ where: { serverId, localZoneId: "zone-vol-2" } })
+    assert.equal(zone.volume, 33, "a heartbeat report with no recent command result was not applied")
+  })
+})

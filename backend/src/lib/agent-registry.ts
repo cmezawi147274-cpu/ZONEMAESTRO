@@ -41,6 +41,41 @@ export function forgetAgent(serverId: string) {
   lastSeen.delete(serverId)
 }
 
+/**
+ * zoneId -> when this zone's volume was last written by a genuine command
+ * result (an ack's zoneState, or the optimistic fallback when the ack
+ * carried none) rather than by a routine heartbeat's zones/sync report.
+ *
+ * Exists because POST /server/zones/sync unconditionally overwrites
+ * Zone.volume with whatever the agent's own next heartbeat reports — and
+ * heartbeats run independently of commands. If a SET_VOLUME doesn't
+ * durably stick on the Windows side by the time the *next* heartbeat
+ * samples it (or that heartbeat's request was already in flight, sampled
+ * before the command even ran), the correct value a user just set gets
+ * silently reverted within one heartbeat interval, which reads as "the
+ * slider snaps back". A short write-wins window after a real command
+ * result means a routine heartbeat can't undo it — this is a mitigation
+ * for a local write that may not be durable, not a second source of
+ * truth: once the window lapses, the agent's own reports are trusted
+ * again exactly as before. Deliberately process-local, same as the rest
+ * of this module.
+ */
+const recentVolumeWrites = new Map<string, number>()
+
+export function markZoneVolumeWritten(zoneId: string) {
+  recentVolumeWrites.set(zoneId, Date.now())
+}
+
+/** Covers at least one full heartbeat interval past the write, so a
+ * heartbeat request already in flight when the command executed — sampled
+ * before it, arriving after — can't win the race either. */
+export function isZoneVolumeWriteFresh(zoneId: string): boolean {
+  const at = recentVolumeWrites.get(zoneId)
+  if (!at) return false
+  const graceMs = (env.agentHeartbeatIntervalSeconds + 5) * 1000
+  return Date.now() - at <= graceMs
+}
+
 export function registerHubSocket(serverId: string, ws: WebSocket) {
   if (!hubSockets.has(serverId)) hubSockets.set(serverId, new Set())
   hubSockets.get(serverId)!.add(ws)

@@ -1,5 +1,6 @@
 import { prisma } from "./db.js"
 import { emitEvent } from "../realtime.js"
+import { markZoneVolumeWritten } from "./agent-registry.js"
 import type { CommandType, CommandSource } from "@prisma/client"
 
 /**
@@ -107,7 +108,10 @@ export async function applyZoneCommandEffect(
       data.playbackState = "STOPPED"
       break
     case "SET_VOLUME":
-      if (typeof payload?.volume === "number") data.volume = payload.volume
+      if (typeof payload?.volume === "number") {
+        data.volume = payload.volume
+        markZoneVolumeWritten(zoneId)
+      }
       break
     case "MUTE":
       data.muted = true

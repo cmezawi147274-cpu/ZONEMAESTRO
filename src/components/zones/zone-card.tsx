@@ -258,8 +258,17 @@ export function ZoneCard({
               setLocalVolume(next)
             }}
             onValueCommitted={(next) => {
-              setDraggingVolume(false)
-              controls.setVolume(next).catch(() => setLocalVolume(zone.volume))
+              // Stay "dragging" (i.e. keep showing the just-set value
+              // rather than following the query cache) until the command
+              // actually resolves. Clearing this immediately re-armed the
+              // effect above while zone.volume in the cache was still the
+              // *old* value — the round-trip to the agent and back is not
+              // instant — so the slider visibly snapped back to the old
+              // value and then jumped to the new one a moment later.
+              controls
+                .setVolume(next)
+                .catch(() => setLocalVolume(zone.volume))
+                .finally(() => setDraggingVolume(false))
             }}
           />
         </RoleGate>
@@ -279,8 +288,10 @@ export function ZoneCard({
                   setLocalVolume(next)
                 }}
                 onValueCommitted={(next) => {
-                  setDraggingVolume(false)
-                  controls.setVolume(next).catch(() => setLocalVolume(zone.volume))
+                  controls
+                    .setVolume(next)
+                    .catch(() => setLocalVolume(zone.volume))
+                    .finally(() => setDraggingVolume(false))
                 }}
               />
             }
