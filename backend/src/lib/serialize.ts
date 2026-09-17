@@ -227,6 +227,7 @@ export function toSchedule(s: DbSchedule) {
     days: s.days,
     priority: s.priority,
     enabled: s.enabled,
+    repeat: s.repeat,
     createdAt: s.createdAt.toISOString(),
   }
 }

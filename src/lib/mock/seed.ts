@@ -552,6 +552,7 @@ export const schedules: Schedule[] = [
       days: ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"] as const,
       priority: 1,
       enabled: true,
+      repeat: true,
       createdAt: isoDaysAgo(100 - i),
     } satisfies Schedule)
   ),
@@ -566,6 +567,7 @@ export const schedules: Schedule[] = [
       days: ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"] as const,
       priority: 1,
       enabled: true,
+      repeat: true,
       createdAt: isoDaysAgo(100 - i),
     } satisfies Schedule)
   ),
@@ -580,6 +582,7 @@ export const schedules: Schedule[] = [
       days: ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"] as const,
       priority: 1,
       enabled: true,
+      repeat: true,
       createdAt: isoDaysAgo(100 - i),
     } satisfies Schedule)
   ),
@@ -594,6 +597,7 @@ export const schedules: Schedule[] = [
       days: ["FRI", "SAT"] as const,
       priority: 2,
       enabled: i % 4 !== 0,
+      repeat: false,
       createdAt: isoDaysAgo(50 - i),
     } satisfies Schedule)
   ),

@@ -34,6 +34,7 @@ const schema = z.object({
   days: z.array(z.enum(DAYS_OF_WEEK)).min(1, "Select at least one day"),
   priority: z.coerce.number().int().min(1).max(10),
   enabled: z.boolean(),
+  repeat: z.boolean(),
 })
 
 type FormValues = z.infer<typeof schema>
@@ -72,6 +73,7 @@ export function ScheduleFormDialog({
           days: ["MON", "TUE", "WED", "THU", "FRI"],
           priority: 1,
           enabled: true,
+          repeat: false,
         },
   })
 
@@ -274,6 +276,23 @@ export function ScheduleFormDialog({
               render={({ field }) => (
                 <FormItem className="flex flex-row items-center justify-between rounded-lg border p-3">
                   <FormLabel className="!mt-0">Enabled</FormLabel>
+                  <FormControl>
+                    <Switch checked={field.value} onCheckedChange={field.onChange} />
+                  </FormControl>
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="repeat"
+              render={({ field }) => (
+                <FormItem className="flex flex-row items-center justify-between rounded-lg border p-3">
+                  <div className="space-y-0.5">
+                    <FormLabel className="!mt-0">Repeat playlist</FormLabel>
+                    <p className="text-xs text-muted-foreground">
+                      Restart from the first track when it finishes, for as long as this time window stays open.
+                    </p>
+                  </div>
                   <FormControl>
                     <Switch checked={field.value} onCheckedChange={field.onChange} />
                   </FormControl>

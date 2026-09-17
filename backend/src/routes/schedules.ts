@@ -96,7 +96,17 @@ export default async function schedulesRoutes(app: FastifyInstance) {
   })
 
   app.post<{
-    Body: { zoneId: string; playlistId: string; name: string; startTime: string; endTime: string; days: DayOfWeek[]; priority?: number; enabled?: boolean }
+    Body: {
+      zoneId: string
+      playlistId: string
+      name: string
+      startTime: string
+      endTime: string
+      days: DayOfWeek[]
+      priority?: number
+      enabled?: boolean
+      repeat?: boolean
+    }
   }>("/schedules", async (request, reply) => {
     const user = requireUser(request)
     if (!can(user.role, "schedule:write")) throw forbidden()
@@ -123,6 +133,7 @@ export default async function schedulesRoutes(app: FastifyInstance) {
         days: validDays(body.days),
         priority: validPriority(body.priority),
         enabled: body.enabled !== false,
+        repeat: body.repeat === true,
       },
     })
     await ensureZonePlaylistAssignment(schedule.zoneId, schedule.playlistId)
@@ -131,7 +142,16 @@ export default async function schedulesRoutes(app: FastifyInstance) {
 
   app.patch<{
     Params: { id: string }
-    Body: Partial<{ name: string; startTime: string; endTime: string; days: DayOfWeek[]; priority: number; enabled: boolean; playlistId: string }>
+    Body: Partial<{
+      name: string
+      startTime: string
+      endTime: string
+      days: DayOfWeek[]
+      priority: number
+      enabled: boolean
+      repeat: boolean
+      playlistId: string
+    }>
   }>("/schedules/:id", async (request, reply) => {
     const user = requireUser(request)
     if (!can(user.role, "schedule:write")) throw forbidden()
@@ -155,6 +175,7 @@ export default async function schedulesRoutes(app: FastifyInstance) {
     if (body.days !== undefined) data.days = validDays(body.days)
     if (body.priority !== undefined) data.priority = validPriority(body.priority)
     if (body.enabled !== undefined) data.enabled = Boolean(body.enabled)
+    if (body.repeat !== undefined) data.repeat = Boolean(body.repeat)
     if (body.playlistId !== undefined) {
       const playlist = await scopedPlaylist(scope, body.playlistId)
       data.playlistId = playlist.id

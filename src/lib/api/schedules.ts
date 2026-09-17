@@ -15,6 +15,7 @@ export interface CreateScheduleInput {
   days: DayOfWeek[]
   priority: number
   enabled: boolean
+  repeat: boolean
 }
 
 export const schedulesApi = {

@@ -82,11 +82,46 @@ function nextTrackId(zoneId, trackIds) {
   return pick;
 }
 
-/** Records a track the zone started outside the bag, so the next refill
- *  does not immediately repeat it. */
-function notePlayed(zoneId, trackId) {
-  const bag = bags.get(zoneId);
-  if (bag && trackId) bag.lastPlayed = trackId;
+/**
+ * Records a track the zone started outside the bag, so the next refill
+ * does not immediately repeat it. Creates the bag if this zone has none
+ * yet (its very first track, started before nextTrackId() was ever
+ * called for it) — otherwise this is a no-op exactly when it matters
+ * most: a fresh zone's first track is the one case a same-track repeat
+ * would be most audible.
+ *
+ * `trackIds`, when the caller has the queue cheaply available (it is not
+ * always — see call sites), properly seeds `remaining` with every *other*
+ * track rather than leaving the bag to refill from the full list on its
+ * next draw. That distinction matters beyond just avoiding a back-to-back
+ * repeat: without it, a caller counting "every distinct track has now
+ * played once" (a non-repeating schedule slot deciding whether its pass
+ * is complete) could see this track drawn a *second* time by the bag
+ * before every other track had its first turn — the position-0-only
+ * swap in refill() keeps it from repeating immediately, but not from
+ * appearing anywhere else in that first shuffle.
+ *
+ * Without `trackIds`, `signature: null` never matches a real one, so the
+ * next nextTrackId() call still resets `remaining` from its own trackIds
+ * argument as usual while keeping `lastPlayed` — a smaller guarantee
+ * (no immediate repeat) but the only one possible without the queue.
+ */
+function notePlayed(zoneId, trackId, trackIds) {
+  if (!trackId) return;
+  let bag = bags.get(zoneId);
+  if (trackIds && trackIds.length) {
+    const ids = trackIds.filter(Boolean);
+    const signature = signatureOf(ids);
+    if (!bag || bag.signature !== signature) {
+      bags.set(zoneId, { signature, remaining: shuffled(ids.filter((id) => id !== trackId)), lastPlayed: trackId });
+      return;
+    }
+  }
+  if (!bag) {
+    bag = { signature: null, remaining: [], lastPlayed: null };
+    bags.set(zoneId, bag);
+  }
+  bag.lastPlayed = trackId;
 }
 
 /** Forgets zones that no longer exist, so a deleted zone's state cannot

@@ -271,6 +271,10 @@ export interface Schedule {
   days: DayOfWeek[]
   priority: number
   enabled: boolean
+  /** Restart the playlist from track one when it finishes a full pass,
+   * for as long as this slot's own time window stays open. Never extends
+   * playback past `endTime`. */
+  repeat: boolean
   createdAt: string
 }
 

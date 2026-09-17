@@ -179,3 +179,161 @@ describe("advancePlaybackOnce() — continuous playback", () => {
     assert.equal(local.playTrack.mock.callCount(), afterFirstEdge, "a non-edge STOPPED tick retried playback");
   });
 });
+
+/**
+ * Schedule.repeat — exercised through the real syncZonePlaylistsOnce() +
+ * advancePlaybackOnce() pair rather than reaching into module-private
+ * state, since the behavior under test is precisely their interaction:
+ * syncZonePlaylistsOnce sets what advancePlaybackOnce reads.
+ *
+ * A tiny fake local service stands in for MusicServer.Api: just enough
+ * state (a queue, a status, a current track) for applyZoneTrackList's real
+ * reconciliation logic to run unmodified against it.
+ */
+describe("Schedule.repeat — schedule-driven playback", () => {
+  const config = require("../lib/config");
+  let fakeZone;
+  let zid; // a fresh zone id per test — agent.js's transition-tracking
+  // state (zoneScheduleWinnerId etc.) is module-private and persists across
+  // tests in this file, so reusing one id would leak "already seen before"
+  // state between tests. A new id each time keeps every test a genuine
+  // first observation, same as a freshly started agent.
+
+  beforeEach(() => {
+    resetShuffle();
+    zid = `z-${Math.random().toString(36).slice(2)}`;
+    fakeZone = { status: "stopped", currentTrackId: null, queue: [] };
+    // CMMP track ids map 1:1 to local ids here — only the mapping's
+    // presence matters to applyZoneTrackList, not the id scheme.
+    Object.assign(config.getState().trackIdMap, { t1: "t1", t2: "t2", t3: "t3" });
+
+    mock.method(cmmp, "syncZonePlaylists", async () => ({ zonePlaylists: [] }));
+    mock.method(cmmp, "getSchedules");
+
+    mock.method(local, "getZonePlaylist", async (zoneId) => {
+      if (zoneId !== zid) return { tracks: [] };
+      return { tracks: fakeZone.queue.map((trackId, position) => ({ id: `entry-${trackId}`, trackId, position })) };
+    });
+    mock.method(local, "queueTrack", async (zoneId, trackId) => {
+      if (zoneId === zid && !fakeZone.queue.includes(trackId)) fakeZone.queue.push(trackId);
+    });
+    mock.method(local, "unqueueTrack", async (zoneId, entryId) => {
+      if (zoneId === zid) fakeZone.queue = fakeZone.queue.filter((t) => `entry-${t}` !== entryId);
+    });
+    mock.method(local, "getZone", async (zoneId) =>
+      zoneId === zid ? { zoneId: zid, status: fakeZone.status, currentTrackId: fakeZone.currentTrackId } : null
+    );
+    mock.method(local, "play", async (zoneId) => {
+      if (zoneId !== zid) return;
+      fakeZone.status = "playing";
+      fakeZone.currentTrackId = fakeZone.queue[0] ?? null;
+    });
+    mock.method(local, "playTrack", async (zoneId, trackId) => {
+      if (zoneId !== zid) return;
+      fakeZone.status = "playing";
+      fakeZone.currentTrackId = trackId;
+    });
+    mock.method(local, "stop", async (zoneId) => {
+      if (zoneId === zid) fakeZone.status = "stopped";
+    });
+    mock.method(local, "getZones", async () => [{ zoneId: zid, status: fakeZone.status }]);
+  });
+  afterEach(() => mock.restoreAll());
+
+  // Always active regardless of when the suite runs — the specific window
+  // isn't what's under test here, "this schedule is currently winning" is.
+  const ALL_DAYS = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
+  function schedule({ id = "sch1", trackIds = ["t1", "t2", "t3"], repeat = false } = {}) {
+    return {
+      id,
+      localZoneId: zid,
+      zoneId: "cmmp-zone",
+      trackIds,
+      excludedTrackIds: [],
+      repeat,
+      startTime: "00:00",
+      endTime: "23:59",
+      days: ALL_DAYS,
+      priority: 1,
+    };
+  }
+
+  /** Drives one full track-ended edge through advancePlaybackOnce.
+   * wasPlaying only flips true on a tick that actually observes "playing"
+   * — the real poller gets several of those while a track plays before
+   * the eventual STOPPED tick — so a bare "set stopped, tick once" only
+   * works for the very first transition. An explicit "still playing" tick
+   * first makes each call in a chained sequence behave the same way. */
+  async function simulateTrackEnded() {
+    await agent.advancePlaybackOnce(); // confirms "still playing"
+    fakeZone.status = "stopped";
+    await agent.advancePlaybackOnce(); // observes the STOPPED edge
+  }
+
+  test("a slot starting starts a stopped zone, not just its queue", async () => {
+    cmmp.getSchedules.mock.mockImplementation(async () => ({ schedules: [schedule()] }));
+    assert.equal(fakeZone.status, "stopped");
+
+    await agent.syncZonePlaylistsOnce();
+
+    assert.equal(fakeZone.status, "playing", "the newly active slot did not start the stopped zone");
+    assert.deepEqual(fakeZone.queue.slice().sort(), ["t1", "t2", "t3"]);
+  });
+
+  test("repeat OFF: plays through once, then stops and does not restart", async () => {
+    cmmp.getSchedules.mock.mockImplementation(async () => ({ schedules: [schedule({ repeat: false })] }));
+    await agent.syncZonePlaylistsOnce(); // starts the zone
+    await agent.advancePlaybackOnce(); // observes PLAYING
+
+    let advances = 0;
+    for (let i = 0; i < 5; i++) {
+      const before = fakeZone.currentTrackId;
+      await simulateTrackEnded();
+      if (fakeZone.currentTrackId !== before && fakeZone.status === "playing") advances++;
+      else break;
+    }
+
+    // Exactly 2 more tracks after the first (3 total), never a 4th.
+    assert.equal(advances, 2, "repeat OFF played a different number of tracks than the queue has");
+    assert.equal(fakeZone.status, "stopped", "repeat OFF restarted the playlist instead of stopping");
+  });
+
+  test("repeat ON: restarts from a fresh pass after completing one", async () => {
+    cmmp.getSchedules.mock.mockImplementation(async () => ({ schedules: [schedule({ repeat: true })] }));
+    await agent.syncZonePlaylistsOnce();
+    await agent.advancePlaybackOnce(); // observes PLAYING
+
+    const played = [];
+    for (let i = 0; i < 6; i++) {
+      played.push(fakeZone.currentTrackId);
+      await simulateTrackEnded();
+      assert.equal(fakeZone.status, "playing", `repeat ON stopped after track ${i + 1} instead of restarting`);
+    }
+    // 6 plays over a 3-track queue with repeat ON: never stopped, so more
+    // than one full pass necessarily happened.
+    assert.equal(played.length, 6);
+  });
+
+  test("window closing with nothing else assigned stops and clears the zone (end-boundary enforcement)", async () => {
+    cmmp.getSchedules.mock.mockImplementation(async () => ({ schedules: [schedule()] }));
+    await agent.syncZonePlaylistsOnce(); // window open, zone starts playing
+    assert.equal(fakeZone.status, "playing");
+
+    cmmp.getSchedules.mock.mockImplementation(async () => ({ schedules: [] })); // window closed, no base assignment
+    await agent.syncZonePlaylistsOnce();
+
+    assert.equal(fakeZone.status, "stopped", "the zone kept playing past its schedule's end boundary");
+    assert.equal(fakeZone.queue.length, 0, "the expired slot's tracks were left queued");
+  });
+
+  test("a schedule already active when the agent starts still starts the zone", async () => {
+    // No prior observation at all (zoneScheduleWinnerId has never seen z1) —
+    // simulates an agent restart while a window is already open.
+    cmmp.getSchedules.mock.mockImplementation(async () => ({ schedules: [schedule()] }));
+    fakeZone.status = "stopped";
+
+    await agent.syncZonePlaylistsOnce();
+
+    assert.equal(fakeZone.status, "playing", "a schedule already active on agent startup left the zone stopped");
+  });
+});

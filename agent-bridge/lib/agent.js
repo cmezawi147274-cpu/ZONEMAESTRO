@@ -49,6 +49,33 @@ const expectedStops = new Set();
 const wasPlaying = new Map();
 
 // ---------------------------------------------------------------------------
+// Schedule repeat state (Schedule.repeat)
+//
+// localZoneId -> true while the schedule currently winning for that zone
+// (or a plain cloud-assigned playlist with no schedule involved at all)
+// should keep looping forever once its queue has played through once.
+// false means "stop after one full pass" — set only while a non-repeating
+// schedule slot is the winner. Populated by syncZonePlaylistsOnce, read by
+// advancePlaybackOnce; absent (not yet observed) defaults to looping, the
+// same as before this feature existed.
+// ---------------------------------------------------------------------------
+const zoneRepeatMode = new Map();
+
+// localZoneId -> the Schedule.id currently winning for that zone, or null.
+// Exists only to detect a *transition* (a window opening or closing) from
+// one syncZonePlaylistsOnce cycle to the next — see its use below for why
+// that, and not just "is there a winner right now", is what actually
+// triggers a fresh pass count or a forced stop.
+const zoneScheduleWinnerId = new Map();
+
+// localZoneId -> { signature, ids: Set<localTrackId> } — which tracks have
+// played since the current non-repeating pass began. Reset whenever the
+// queue's contents change (a new `signature`) or a new schedule window
+// begins (see zoneScheduleWinnerId). Only consulted for zones currently in
+// zoneRepeatMode === false; harmless if stale otherwise.
+const passHeard = new Map();
+
+// ---------------------------------------------------------------------------
 // Heartbeat + zone sync
 // ---------------------------------------------------------------------------
 
@@ -565,7 +592,7 @@ async function applyZoneTrackList(localZoneId, trackIds, excludedTrackIds) {
         // so tell the shuffle bag directly — otherwise the first natural
         // end-of-track after a reassignment could immediately redraw the
         // very track this reassignment just started.
-        shuffle.notePlayed(localZoneId, first.trackId);
+        shuffle.notePlayed(localZoneId, first.trackId, Array.from(wantedLocalIds));
         log(`  zone ${localZoneId} moved onto its newly assigned playlist`);
       } else if (!first) {
         expectedStops.add(localZoneId);
@@ -592,20 +619,90 @@ async function syncZonePlaylistsOnce() {
   const byLocalZoneId = new Map((zonePlaylists || []).filter((zp) => zp.localZoneId).map((zp) => [zp.localZoneId, zp]));
   // Union, not just the cloud's list: a zone assigned nothing but a
   // schedule (never manually given a "current" playlist) still needs to
-  // play at its slot's start.
-  const allLocalZoneIds = new Set([...byLocalZoneId.keys(), ...scheduleWinners.keys()]);
+  // play at its slot's start. zoneScheduleWinnerId's own keys are
+  // included too — a zone whose only schedule just stopped winning (its
+  // window closed) has neither a base playlist nor a current winner, so
+  // it would otherwise drop out of this set entirely and never get
+  // visited to detect that transition and enforce the end boundary below.
+  const allLocalZoneIds = new Set([...byLocalZoneId.keys(), ...scheduleWinners.keys(), ...zoneScheduleWinnerId.keys()]);
 
   for (const localZoneId of allLocalZoneIds) {
     const winner = scheduleWinners.get(localZoneId);
     const base = byLocalZoneId.get(localZoneId);
+
+    // Two separate *transition* checks, not just "is one winning right
+    // now" — syncZonePlaylistsOnce re-applies the same winner every ~20s
+    // regardless of whether anything changed, and re-triggering a start or
+    // a pass-count reset on every one of those cycles would fight an
+    // operator's own Stop/Pause the same way an unconditional restart
+    // would.
+    //
+    //  - enteringWindow: this schedule just became the winner — including
+    //    the agent having just started mid-window (previousWinnerId
+    //    `undefined`, e.g. after a crash or update), which must still
+    //    start a stopped zone rather than waiting for tomorrow's
+    //    open/close cycle.
+    //  - leavingWindow: a schedule that *was* winning no longer is.
+    //    Deliberately excludes `undefined -> null` (never observed before,
+    //    still no winner) — with no prior observation there is no way to
+    //    tell "a window just closed" from "this zone was never under a
+    //    schedule", and the latter must not be force-stopped (its queue is
+    //    not the cloud's to clear).
+    const winnerId = winner ? winner.id : null;
+    const previousWinnerId = zoneScheduleWinnerId.has(localZoneId) ? zoneScheduleWinnerId.get(localZoneId) : undefined;
+    const enteringWindow = winnerId !== null && winnerId !== previousWinnerId;
+    const leavingWindow = winnerId === null && previousWinnerId !== undefined && previousWinnerId !== null;
+    zoneScheduleWinnerId.set(localZoneId, winnerId);
+    if (enteringWindow) passHeard.delete(localZoneId);
+
     if (winner) {
       await applyZoneTrackList(localZoneId, winner.trackIds, winner.excludedTrackIds);
+      zoneRepeatMode.set(localZoneId, winner.repeat === true);
+      // A slot *starting* must start a stopped zone, not just update its
+      // queue and leave it silent until a human presses Play.
+      // applyZoneTrackList only ever re-points a zone already playing.
+      if (enteringWindow) await startZoneForNewWindow(localZoneId);
     } else if (base && base.playlistId) {
       await applyZoneTrackList(localZoneId, base.trackIds, base.excludedTrackIds);
+      zoneRepeatMode.set(localZoneId, true);
+    } else if (leavingWindow) {
+      // The schedule that just lost the zone was its only assignment: its
+      // end time is a real boundary, not a suggestion. Clear the queue and
+      // stop rather than leaving the expired slot's tracks playing
+      // indefinitely — applyZoneTrackList's own "nothing assigned" branch
+      // marks this as an expected stop.
+      await applyZoneTrackList(localZoneId, [], []);
+      zoneRepeatMode.delete(localZoneId);
     }
-    // Neither a winning schedule nor a cloud-assigned playlist: nothing to
-    // reconcile, same as the original "continue" — this zone's local
-    // queue is not the cloud's to clear.
+    // Neither a winning schedule nor a cloud-assigned playlist, and no
+    // window just closed: nothing to reconcile, same as the original
+    // "continue" — this zone's local queue was never the cloud's to clear.
+  }
+}
+
+/** Starts a zone that isn't already playing, for a schedule slot that just
+ * became this zone's winner. local.play() picks up whatever
+ * applyZoneTrackList just queued; which exact track it lands on is read
+ * back so the shuffle bag's bookkeeping is correct from the first track,
+ * not just from the first *auto-advanced* one. */
+async function startZoneForNewWindow(localZoneId) {
+  try {
+    const zone = await local.getZone(localZoneId);
+    if (!zone || String(zone.status || "").toLowerCase() === "playing") return;
+    await local.play(localZoneId);
+    const [started, playlist] = await Promise.all([local.getZone(localZoneId), local.getZonePlaylist(localZoneId)]);
+    if (started && started.currentTrackId) {
+      // The (local) queue, so notePlayed can seed the shuffle bag's
+      // `remaining` properly — excluding this track outright, not just
+      // deprioritizing it — which is what lets a non-repeating schedule's
+      // "every track heard once" check land on exactly one pass. See
+      // shuffle.js notePlayed().
+      const localTrackIds = playlist.tracks.map((t) => t.trackId);
+      shuffle.notePlayed(localZoneId, started.currentTrackId, localTrackIds);
+    }
+    log(`  zone ${localZoneId} started for its newly active schedule slot`);
+  } catch (err) {
+    log.warn(`  could not start zone ${localZoneId} for its new schedule slot:`, err.message);
   }
 }
 
@@ -642,6 +739,9 @@ async function advancePlaybackOnce() {
   const live = new Set(liveZoneIds);
   for (const zoneId of expectedStops) if (!live.has(zoneId)) expectedStops.delete(zoneId);
   for (const zoneId of wasPlaying.keys()) if (!live.has(zoneId)) wasPlaying.delete(zoneId);
+  for (const zoneId of zoneRepeatMode.keys()) if (!live.has(zoneId)) zoneRepeatMode.delete(zoneId);
+  for (const zoneId of zoneScheduleWinnerId.keys()) if (!live.has(zoneId)) zoneScheduleWinnerId.delete(zoneId);
+  for (const zoneId of passHeard.keys()) if (!live.has(zoneId)) passHeard.delete(zoneId);
 
   for (const z of zones) {
     const zoneId = z.zoneId;
@@ -663,6 +763,29 @@ async function advancePlaybackOnce() {
     }
     const trackIds = queue.map((t) => t.trackId);
     if (trackIds.length < 2) continue; // nothing to advance to
+
+    // Schedule.repeat === false: play through the queue once, then stop —
+    // never restart the same playlist, and never past the schedule's own
+    // end time (that boundary is enforced separately, in
+    // syncZonePlaylistsOnce, which still runs on its own ~20s cycle
+    // regardless of what this loop does). "Once" is tracked as "every
+    // distinct track in the queue has played" rather than a fixed count,
+    // so it survives the queue being rebuilt with the same tracks in a
+    // different order.
+    if (zoneRepeatMode.get(zoneId) === false) {
+      const signature = trackIds.slice().sort().join("|");
+      let heard = passHeard.get(zoneId);
+      if (!heard || heard.signature !== signature) {
+        heard = { signature, ids: new Set() };
+        passHeard.set(zoneId, heard);
+      }
+      const justEnded = shuffle.peek(zoneId)?.lastPlayed;
+      if (justEnded) heard.ids.add(justEnded);
+      if (heard.ids.size >= trackIds.length) {
+        log(`  zone ${zoneId}: playlist completed and Repeat is off — left stopped.`);
+        continue;
+      }
+    }
 
     // Bounded, not infinite: at most one attempt per track in the queue,
     // so one broken file is skipped rather than wedging the zone, but a

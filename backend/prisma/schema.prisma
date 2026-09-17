@@ -535,6 +535,11 @@ model Schedule {
   days       String[] // subset of MON..SUN
   priority   Int      @default(1)
   enabled    Boolean  @default(true)
+  // When the slot's playlist finishes one full pass, restart it from track
+  // one — but only while the slot's own [startTime, endTime) window is
+  // still open. Off by default: a slot's playlist plays through once and
+  // then stops, matching every schedule that predates this column.
+  repeat     Boolean  @default(false)
   createdAt  DateTime @default(now())
 
   @@index([zoneId])

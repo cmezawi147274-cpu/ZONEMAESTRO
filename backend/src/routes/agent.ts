@@ -734,6 +734,7 @@ export default async function agentRoutes(app: FastifyInstance) {
         endTime: s.endTime,
         days: s.days,
         priority: s.priority,
+        repeat: s.repeat,
       })),
     })
   })
