@@ -608,6 +608,11 @@ export default async function agentRoutes(app: FastifyInstance) {
       const volume = num(z, "volume")
       const mutedVal = field(z, "muted")
       const muted = typeof mutedVal === "boolean" ? mutedVal : undefined
+      // Continuous playback can change a zone's track with no command
+      // involved, so this is the only way the cloud's "now playing" stays
+      // current between commands. Optional — an older agent build simply
+      // omits it, same as it already omits volume/muted when it has none.
+      const currentTrackId = str(z, "currentTrackId")
 
       const existing = await prisma.zone.findUnique({ where: { serverId_localZoneId: { serverId: ctx.serverId, localZoneId } } })
       // A routine heartbeat must not undo a volume a command just set —
@@ -618,7 +623,13 @@ export default async function agentRoutes(app: FastifyInstance) {
       const zone = existing
         ? await prisma.zone.update({
             where: { id: existing.id },
-            data: { name, ...(playbackState ? { playbackState } : {}), ...(applyVolume ? { volume } : {}), ...(muted !== undefined ? { muted } : {}) },
+            data: {
+              name,
+              ...(playbackState ? { playbackState } : {}),
+              ...(applyVolume ? { volume } : {}),
+              ...(muted !== undefined ? { muted } : {}),
+              ...(currentTrackId ? { currentTrackId } : {}),
+            },
           })
         : await prisma.zone.create({
             data: {

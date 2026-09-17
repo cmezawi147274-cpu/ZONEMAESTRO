@@ -234,13 +234,23 @@ async function heartbeatOnce() {
     const localZones = await local.getZones();
     status.localReachable = true;
     status.localError = null;
-    const zones = localZones.map((z) => ({
-      localZoneId: z.zoneId,
-      name: z.zoneName,
-      playbackState: local.toCmmpPlaybackState(z.status),
-      volume: typeof z.volume === "number" ? z.volume : undefined,
-      muted: typeof z.isMuted === "boolean" ? z.isMuted : undefined,
-    }));
+    const zones = localZones.map((z) => {
+      // Continuous playback (advancePlaybackOnce) can change a zone's track
+      // with no command involved, so the cloud's "now playing" would go
+      // stale between commands without this — rides the existing
+      // heartbeat, no extra call. Translated to the CMMP id the same way
+      // readBackZoneState does; omitted (not sent wrong) when this local
+      // track has no known cloud mapping.
+      const cmmpTrackId = cmmpTrackIdOf(z.currentTrackId);
+      return {
+        localZoneId: z.zoneId,
+        name: z.zoneName,
+        playbackState: local.toCmmpPlaybackState(z.status),
+        volume: typeof z.volume === "number" ? z.volume : undefined,
+        muted: typeof z.isMuted === "boolean" ? z.isMuted : undefined,
+        ...(cmmpTrackId ? { currentTrackId: cmmpTrackId } : {}),
+      };
+    });
     const synced = await cmmp.syncZones(zones);
     if (Array.isArray(synced.zones) && synced.zones.length > 0) {
       log(`zone sync ok: ${synced.zones.length} zone(s)`);
