@@ -1,4 +1,5 @@
 import jwt from "jsonwebtoken"
+import crypto from "node:crypto"
 import { env } from "./env.js"
 import type { Role } from "@prisma/client"
 
@@ -14,6 +15,15 @@ export interface AccessClaims {
 export interface RefreshClaims {
   sub: string
   type: "refresh"
+  /** Makes every issued refresh token byte-distinct even for the same user
+   * within the same second. jwt.sign()'s only other claims (sub, type,
+   * iat, exp) are otherwise fully deterministic — iat has one-second
+   * resolution and exp is derived from it — so two logins (or a password
+   * reset immediately followed by a login) for the same user inside one
+   * second produced an *identical* signed token and tokenHash, and the
+   * second INSERT died on RefreshToken's unique constraint on tokenHash
+   * with a raw 500 instead of a session. */
+  jti: string
 }
 
 export function signAccessToken(user: { id: string; email: string; role: Role; organizationId: string | null; locationId: string | null }) {
@@ -29,7 +39,7 @@ export function signAccessToken(user: { id: string; email: string; role: Role; o
 }
 
 export function signRefreshToken(userId: string) {
-  const claims: RefreshClaims = { sub: userId, type: "refresh" }
+  const claims: RefreshClaims = { sub: userId, type: "refresh", jti: crypto.randomUUID() }
   return jwt.sign(claims, env.jwtRefreshSecret, { expiresIn: `${env.jwtRefreshTtlDays}d` })
 }
 
