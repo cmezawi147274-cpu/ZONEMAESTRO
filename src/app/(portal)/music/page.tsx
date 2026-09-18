@@ -43,7 +43,7 @@ export default function MusicLibraryPage() {
   const [search, setSearch] = useState("")
   const [genre, setGenre] = useState("all")
   const [selected, setSelected] = useState<string[]>([])
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const { data: tracks, isLoading } = useTracks({ search: search || undefined, genre })
   const { data: folders } = useMusicFolders()
   const deleteTrack = useDeleteTrack()
@@ -80,7 +80,7 @@ export default function MusicLibraryPage() {
   }
 
   function toggleCollapsed(key: string) {
-    setCollapsed((prev) => {
+    setExpanded((prev) => {
       const next = new Set(prev)
       if (next.has(key)) next.delete(key)
       else next.add(key)
@@ -183,7 +183,7 @@ export default function MusicLibraryPage() {
         <div className="space-y-4">
           {groups.map((group) => {
             const key = group.id ?? "unfiled"
-            const isCollapsed = collapsed.has(key)
+            const isCollapsed = !expanded.has(key)
             const ids = group.tracks.map((t) => t.id)
             const folderAllSelected = ids.length > 0 && ids.every((id) => selected.includes(id))
             const folderSomeSelected = ids.some((id) => selected.includes(id)) && !folderAllSelected

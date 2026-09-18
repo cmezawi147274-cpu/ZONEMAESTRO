@@ -1,11 +1,13 @@
 "use client"
 
+import { useMemo, useState } from "react"
 import Link from "next/link"
-import { ListMusic, Copy, Trash2 } from "lucide-react"
+import { ListMusic, Copy, Trash2, Search } from "lucide-react"
 import { PageHeader } from "@/components/common/page-header"
 import { EmptyState } from "@/components/common/empty-state"
 import { RoleGate } from "@/components/common/role-gate"
 import { Card, CardContent } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -29,8 +31,15 @@ export default function PlaylistsPage() {
   const { data: organizations } = useOrganizations()
   const duplicate = useDuplicatePlaylist()
   const remove = useDeletePlaylist()
+  const [search, setSearch] = useState("")
 
   const orgName = (id: string | null) => (id ? organizations?.find((o) => o.id === id)?.name : "Shared")
+
+  const filteredPlaylists = useMemo(() => {
+    const query = search.trim().toLowerCase()
+    if (!query) return playlists
+    return playlists?.filter((playlist) => playlist.name.toLowerCase().includes(query))
+  }, [playlists, search])
 
   return (
     <div className="space-y-6">
@@ -44,6 +53,18 @@ export default function PlaylistsPage() {
         }
       />
 
+      {!isLoading && playlists && playlists.length > 0 && (
+        <div className="relative sm:max-w-sm">
+          <Search className="absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="Search playlists…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-8"
+          />
+        </div>
+      )}
+
       {isLoading ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {Array.from({ length: 6 }).map((_, i) => (
@@ -56,9 +77,15 @@ export default function PlaylistsPage() {
             <EmptyState icon={ListMusic} title="No playlists yet" className="border-none py-10" />
           </CardContent>
         </Card>
+      ) : !filteredPlaylists || filteredPlaylists.length === 0 ? (
+        <Card>
+          <CardContent>
+            <EmptyState icon={ListMusic} title="No matching playlists" className="border-none py-10" />
+          </CardContent>
+        </Card>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {playlists.map((playlist) => (
+          {filteredPlaylists.map((playlist) => (
             <Card key={playlist.id}>
               <CardContent className="space-y-3">
                 <div>
