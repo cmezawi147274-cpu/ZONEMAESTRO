@@ -25,6 +25,7 @@ import usersRoutes from "./routes/users.js"
 import dashboardRoutes from "./routes/dashboard.js"
 import monitoringRoutes from "./routes/monitoring.js"
 import prayerRoutes from "./routes/prayer.js"
+import downloadsRoutes from "./routes/downloads.js"
 import agentRoutes from "./routes/agent.js"
 import { attachMusicServerHub } from "./agent/signalrHub.js"
 import { startAgentHeartbeatSweep, startUnpairedRetentionSweep, startRetentionSweep, startOrphanMediaSweep } from "./lib/agent-sweep.js"
@@ -214,6 +215,7 @@ await app.register(
     await api.register(dashboardRoutes)
     await api.register(monitoringRoutes)
     await api.register(prayerRoutes)
+    await api.register(downloadsRoutes)
   },
   { prefix: "/api" }
 )

@@ -13,7 +13,7 @@ import type { Role } from "@/lib/constants"
  * individual UI actions. See README "Security Notes".
  */
 
-const PUBLIC_ROUTES = ["/login"]
+const PUBLIC_ROUTES = ["/login", "/terms-of-service", "/privacy-policy"]
 const SESSION_COOKIE = "cmmp_session"
 
 const MOCK_SECRET = new TextEncoder().encode(

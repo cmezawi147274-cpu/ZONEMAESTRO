@@ -301,6 +301,43 @@ describe("idempotent sync", () => {
     assert.equal(final.resultMessage, "first", "a retried ack overwrote the already-recorded result")
     assert.deepEqual(final.completedAt, after.completedAt, "a retried ack moved completedAt")
   })
+
+  test("an EXECUTING ack claims a command without resolving it", async () => {
+    const { code, id } = await freshServer()
+    const paired = await complete(code)
+    const token = paired.body.agentToken as string
+    const command = await prisma.remoteCommand.create({
+      data: { id: `${P}cmd-exec-${Date.now()}`, serverId: id, type: "RESTART_SERVICE", status: "SENT", source: "SUPER_ADMIN", issuedById: `${P}user` },
+    })
+    const ack = (status: string) =>
+      fetch(`${API}/api/server/commands/ack`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ commandId: command.id, status }),
+      })
+
+    // The agent claims the command before doing the work.
+    assert.equal((await ack("EXECUTING")).status, 200)
+    const claimed = await prisma.remoteCommand.findUniqueOrThrow({ where: { id: command.id } })
+    assert.equal(claimed.status, "EXECUTING")
+    assert.notEqual(claimed.executingAt, null, "executingAt was not stamped")
+    assert.equal(claimed.completedAt, null, "EXECUTING must not complete the command")
+
+    // And it is no longer handed out, which is the point of the claim.
+    const pending = await fetch(`${API}/api/server/commands/pending`, { headers: { Authorization: `Bearer ${token}` } })
+    const body = (await pending.json()) as { commands: { commandId: string }[] }
+    assert.equal(
+      body.commands.some((c) => c.commandId === command.id),
+      false,
+      "a claimed command was handed out again"
+    )
+
+    // The real result still lands afterwards.
+    assert.equal((await ack("SUCCESS")).status, 200)
+    const done = await prisma.remoteCommand.findUniqueOrThrow({ where: { id: command.id } })
+    assert.equal(done.status, "SUCCESS", "the final ack was rejected after an EXECUTING claim")
+    assert.notEqual(done.completedAt, null)
+  })
 })
 
 describe("SignalR hub auth", () => {

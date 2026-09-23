@@ -89,6 +89,12 @@ services:
       MUSIC_STORAGE_DIR: /app/data/music
     volumes:
       - music-data:/app/data/music
+      # The Local Music Server installer offered on the Settings page
+      # (routes/downloads.ts). Read-only, and deliberately NOT inside
+      # /app/data/music: the orphan-media sweep deletes files there that have
+      # no Track row. Updating the installer is "replace the file in
+      # ./downloads on the host" — no rebuild, no restart.
+      - ./downloads:/app/data/downloads:ro
     # Bound to localhost only — see the matching note on `app` above. Caddy
     # reaches this over the Docker network as `backend:4000`, not via this
     # published port.

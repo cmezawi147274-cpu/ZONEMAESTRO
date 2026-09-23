@@ -316,8 +316,29 @@ async function readBackZoneState(zoneId) {
   };
 }
 
+// commandId -> the first final ack this agent produced for it. The cloud
+// keeps handing a command out (status SENT) until an ack actually lands, so
+// if that ack is lost to a network blip the same command comes back on a
+// later poll. pollCommandsOnce() then re-sends this ack instead of running
+// the action a second time. Bounded: only the most recent ids are kept.
+const completedCommands = new Map();
+const COMPLETED_COMMANDS_KEPT = 200;
+
+function rememberCompleted(payload) {
+  // First ack wins: when a SUCCESS ack fails to send, executeCommand()'s
+  // catch follows up with a FAILED ack about the network error, which must
+  // not overwrite what the action really did.
+  if (completedCommands.has(payload.commandId)) return;
+  completedCommands.set(payload.commandId, payload);
+  if (completedCommands.size > COMPLETED_COMMANDS_KEPT) {
+    completedCommands.delete(completedCommands.keys().next().value);
+  }
+}
+
 async function ack(commandId, status_, resultMessage, zoneState) {
-  await cmmp.ackCommand({ commandId, status: status_, resultMessage: resultMessage || undefined, zoneState });
+  const payload = { commandId, status: status_, resultMessage: resultMessage || undefined, zoneState };
+  rememberCompleted(payload);
+  await cmmp.ackCommand(payload);
 }
 
 /**
@@ -410,6 +431,17 @@ const SERVER_HANDLERS = {
 async function executeCommand(cmd) {
   const { commandId, type, zoneId, payload } = cmd;
 
+  // Claim the command before doing the work: GET /commands/pending only
+  // re-delivers PENDING/SENT, so reporting EXECUTING stops the cloud handing
+  // this same commandId to another request while it runs. Best-effort — if
+  // the claim can't be sent, the work still goes ahead (the single-flight
+  // poll and the completed-command replay above already prevent a repeat).
+  try {
+    await cmmp.ackCommand({ commandId, status: "EXECUTING" });
+  } catch (err) {
+    log.warn(`could not report EXECUTING for ${type}:`, err.message);
+  }
+
   const serverHandler = SERVER_HANDLERS[type];
   if (serverHandler) {
     try {
@@ -466,10 +498,37 @@ async function executeCommand(cmd) {
   }
 }
 
+// Two things trigger a command poll: the commandPollMs timer and a
+// MusicServerHub push. GET /commands/pending returns a command until its ack
+// lands, so two polls running at once could both receive it — harmless for
+// PLAY/PAUSE/SET_VOLUME, but a double skip for NEXT/PREVIOUS. Polls are
+// therefore single-flight. A trigger that arrives mid-poll is not dropped:
+// it runs one more poll as soon as the current one finishes, so a pushed
+// command still goes out without waiting for the timer.
+let commandPollRunning = false;
+let commandPollQueued = false;
+
 async function pollCommandsOnce() {
-  const { commands } = await cmmp.pendingCommands();
-  for (const cmd of commands || []) {
-    await executeCommand(cmd);
+  if (commandPollRunning) {
+    commandPollQueued = true;
+    return;
+  }
+  commandPollRunning = true;
+  try {
+    do {
+      commandPollQueued = false;
+      const { commands } = await cmmp.pendingCommands();
+      for (const cmd of commands || []) {
+        const alreadyAcked = completedCommands.get(cmd.commandId);
+        if (alreadyAcked) {
+          await cmmp.ackCommand(alreadyAcked);
+          continue;
+        }
+        await executeCommand(cmd);
+      }
+    } while (commandPollQueued);
+  } finally {
+    commandPollRunning = false;
   }
 }
 

@@ -4,7 +4,7 @@ import { useState } from "react"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import * as z from "zod"
-import { Loader2 } from "lucide-react"
+import { Download, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/common/page-header"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form"
 import { useAuth } from "@/hooks/use-auth"
+import { readSession } from "@/lib/auth/session"
 import { useSetUserPassword } from "@/hooks/use-users"
 import { useOrganization } from "@/hooks/use-organizations"
 import { isMockMode, env } from "@/lib/config"
@@ -98,6 +99,60 @@ function ChangePasswordCard() {
   )
 }
 
+/** Super-Admin-only download of the Local Music Server installer.
+ *
+ * Fetched rather than linked: the portal authenticates with a bearer token
+ * from localStorage (src/lib/auth/session.ts), which a plain <a href="">
+ * cannot send — so the file is requested with the header and handed to the
+ * browser as a blob. The endpoint enforces the same Super Admin check
+ * server-side, so hiding this card is UX only. */
+function LocalMusicServerCard() {
+  const [downloading, setDownloading] = useState(false)
+
+  async function download() {
+    setDownloading(true)
+    try {
+      const session = readSession()
+      const res = await fetch(`${env.apiUrl}/downloads/local-music-server`, {
+        headers: session ? { Authorization: `Bearer ${session.tokens.accessToken}` } : {},
+      })
+      if (!res.ok) {
+        throw new Error(res.status === 404 ? "No installer has been uploaded yet." : "Could not download the installer")
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement("a")
+      link.href = url
+      // Named explicitly: a blob: URL carries no filename, so an empty
+      // download attribute makes the browser save it as the blob's UUID.
+      link.download = "local-music-server.zip"
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not download the installer")
+    } finally {
+      setDownloading(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm font-medium">Local Music Server</CardTitle>
+        <CardDescription>The installer for setting up a venue PC.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <Button onClick={download} disabled={downloading}>
+          {downloading ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+          Download Latest Local Music Server
+        </Button>
+      </CardContent>
+    </Card>
+  )
+}
+
 export default function SettingsPage() {
   const { user } = useAuth()
   const { data: org } = useOrganization(user?.organizationId ?? undefined)
@@ -168,6 +223,8 @@ export default function SettingsPage() {
           )}
         </CardContent>
       </Card>
+
+      {user?.role === "SUPER_ADMIN" && <LocalMusicServerCard />}
     </div>
   )
 }

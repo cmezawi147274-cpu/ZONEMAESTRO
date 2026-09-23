@@ -145,7 +145,7 @@ describe("advancePlaybackOnce() — continuous playback", () => {
 
     assert.equal(local.playTrack.mock.callCount(), 0, "an operator's Stop was auto-resumed");
     assert.equal(local.stop.mock.callCount(), 1);
-    assert.equal(cmmp.ackCommand.mock.calls[0].arguments[0].status, "SUCCESS");
+    assert.equal(cmmp.ackCommand.mock.calls.at(-1).arguments[0].status, "SUCCESS");
   });
 
   test("a broken track is skipped in favor of another, bounded — not an infinite retry", async () => {

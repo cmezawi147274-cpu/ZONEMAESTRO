@@ -13,6 +13,15 @@ import { env } from "./env.js"
 const lastSeen = new Map<string, number>()
 const hubSockets = new Map<string, Set<WebSocket>>()
 
+/**
+ * Hub sockets whose agent advertised the `cmdfix` capability on connect (see
+ * agent/signalrHub.ts). That capability — not the reported version — is what
+ * says this agent runs a command at most once when a push and a poll
+ * overlap, because a fixed and an unfixed 1.0.0 report the same version.
+ * Anything without it is never pushed to and keeps using the REST poll.
+ */
+const pushCapableSockets = new WeakSet<WebSocket>()
+
 interface PendingAck {
   resolve: (v: { status: string; resultMessage: string | null }) => void
   timer: NodeJS.Timeout
@@ -76,7 +85,8 @@ export function isZoneVolumeWriteFresh(zoneId: string): boolean {
   return Date.now() - at <= graceMs
 }
 
-export function registerHubSocket(serverId: string, ws: WebSocket) {
+export function registerHubSocket(serverId: string, ws: WebSocket, options?: { pushCapable?: boolean }) {
+  if (options?.pushCapable) pushCapableSockets.add(ws)
   if (!hubSockets.has(serverId)) hubSockets.set(serverId, new Set())
   hubSockets.get(serverId)!.add(ws)
   markAgentSeen(serverId)
@@ -100,7 +110,7 @@ export function pushToAgent(serverId: string, target: string, args: unknown[]): 
   const frame = JSON.stringify({ type: 1, target, arguments: args }) + ""
   let sent = false
   for (const ws of set) {
-    if (ws.readyState === ws.OPEN) {
+    if (ws.readyState === ws.OPEN && pushCapableSockets.has(ws)) {
       ws.send(frame)
       sent = true
     }

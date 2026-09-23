@@ -2,6 +2,7 @@
 
 import { useState } from "react"
 import Image from "next/image"
+import Link from "next/link"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import * as z from "zod"
@@ -185,6 +186,18 @@ export default function LoginPage() {
               </Button>
             </form>
           </Form>
+
+          <p className="mt-5 text-center text-[12px] leading-relaxed text-gray-500">
+            By continuing, you agree to the ZoneMaestro{" "}
+            <Link href="/terms-of-service" className="whitespace-nowrap rounded-sm text-gray-300 underline decoration-gray-600 underline-offset-2 transition-colors hover:text-white hover:decoration-gray-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#34b4f5]/50">
+              Terms of Service
+            </Link>{" "}
+            and{" "}
+            <Link href="/privacy-policy" className="whitespace-nowrap rounded-sm text-gray-300 underline decoration-gray-600 underline-offset-2 transition-colors hover:text-white hover:decoration-gray-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#34b4f5]/50">
+              Privacy Policy
+            </Link>
+            .
+          </p>
 
           {isMockMode && (
             <div className="mt-6 space-y-2 rounded-md border border-[#262626] bg-[#181818] p-4">

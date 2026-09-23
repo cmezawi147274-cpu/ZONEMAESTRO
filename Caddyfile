@@ -10,6 +10,12 @@
 #                      handed to Windows MusicServer agents (see
 #                      backend/src/lib/media-url.ts); never hit by the
 #                      browser, and not one of the paths Next.js rewrites.
+#   /hubs/*         -> backend:4000 directly. MusicServerHub, the venue
+#                      agents' push WebSocket (backend/src/agent/signalrHub.ts).
+#                      Without this rule it fell through to app:3000, which
+#                      has no handler: every connection hung ~300s until
+#                      Node's request timeout, so push never worked and
+#                      every command waited for the agent's next poll.
 #   /health         -> backend:4000 directly. Ops liveness check
 #                      (GET /health -> {ok, commit}); mounted at the
 #                      backend's top level, not under /api, so it needs its
@@ -98,7 +104,7 @@ cloud.zonemaestro.com {
 		-Server
 	}
 
-	@backend_direct path /media/music/* /socket.io/* /health
+	@backend_direct path /media/music/* /socket.io/* /hubs/* /health
 	handle @backend_direct {
 		reverse_proxy backend:4000
 	}

@@ -35,6 +35,12 @@ function hubUrl(token) {
   const url = new URL(`${base}/hubs/musicserver`, api.origin);
   url.protocol = api.protocol === "https:" ? "wss:" : "ws:";
   url.searchParams.set("access_token", token);
+  // What this build can do safely, independent of its reported version: this
+  // agent runs a command at most once even when a hub push and a poll
+  // overlap (see agent.js pollCommandsOnce). The cloud pushes only to
+  // sockets that say so — a fixed and an unfixed 1.0.0 look identical
+  // otherwise (backend/src/lib/agent-registry.ts pushToAgent).
+  url.searchParams.set("caps", "cmdfix");
   return url.toString();
 }
 

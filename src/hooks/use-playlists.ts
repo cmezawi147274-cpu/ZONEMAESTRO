@@ -91,6 +91,9 @@ export function useAssignPlaylist() {
       playlistsApi.assign(playlistId, { targetType, targetId }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["zones"] })
+      // Always assigns to a ZONE (see assign-playlist-dialog.tsx), and is
+      // no longer covered by the ["zones"] prefix — see useZonePlaylists.
+      qc.invalidateQueries({ queryKey: ["zone-playlists"] })
       toast.success("Playlist assigned")
     },
     onError: (e: Error) => toast.error(e.message),

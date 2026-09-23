@@ -82,7 +82,11 @@ async function handleConnection(ws: WebSocket, url: URL) {
         // "handshake accepted".
         handshaken = true
         ws.send(frame({}))
-        registerHubSocket(ctx.serverId, ws)
+        // `caps` is the agent's own statement of what it can do safely — a
+        // fixed and an unfixed 1.0.0 report the same version, so the version
+        // alone cannot answer "is it safe to push to this agent".
+        const caps = (url.searchParams.get("caps") ?? "").split(",").map((c) => c.trim())
+        registerHubSocket(ctx.serverId, ws, { pushCapable: caps.includes("cmdfix") })
         pingTimer = setInterval(() => {
           if (ws.readyState === ws.OPEN) ws.send(frame({ type: 6 }))
         }, 10_000)

@@ -24,10 +24,21 @@ export function useZone(id: string | undefined) {
 }
 
 /** Playlists actually assigned to this zone — see zonesApi.playlists().
- * Drives the zone card's own picker (Task 2): never the whole library. */
+ * Drives the zone card's own picker (Task 2): never the whole library.
+ *
+ * Deliberately rooted at "zone-playlists" rather than under ["zones"]:
+ * TanStack Query matches keys by prefix, so while this lived at
+ * ["zones","detail",zoneId,"playlists"] every invalidateQueries(["zones"])
+ * — which the realtime handler fires on ZONE_STATUS_CHANGED,
+ * PLAYBACK_CHANGED and COMMAND_COMPLETED — refetched this query for every
+ * mounted zone card at once. On a full /zones page that turned one zone
+ * event into one request per zone plus the list, which was enough to spend
+ * the backend's 600/min per-IP budget and have real clicks come back 429.
+ * Mutations that change which playlists a zone has invalidate this key
+ * explicitly instead. */
 export function useZonePlaylists(zoneId: string, options?: { enabled?: boolean }) {
   return useQuery({
-    queryKey: ["zones", "detail", zoneId, "playlists"],
+    queryKey: ["zone-playlists", zoneId],
     queryFn: () => zonesApi.playlists(zoneId),
     enabled: options?.enabled ?? true,
   })
@@ -107,6 +118,8 @@ export function useAssignZonePlaylist() {
       zonesApi.assignPlaylist(zoneId, playlistId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["zones"] })
+      // No longer covered by the ["zones"] prefix — see useZonePlaylists.
+      qc.invalidateQueries({ queryKey: ["zone-playlists"] })
       toast.success("Playlist assigned to zone")
     },
     onError: (e: Error) => toast.error(e.message),
