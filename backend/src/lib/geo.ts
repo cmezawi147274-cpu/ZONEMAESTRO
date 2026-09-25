@@ -40,7 +40,11 @@ const normalize = (value: string) => value.trim().toLowerCase()
  * the same tie-break the picker's city list is ordered by. Returns null
  * when the dataset has no such city, never a fallback point.
  */
-export function resolveCityCoordinates(city: string | null, country: string | null): ResolvedCoordinates | null {
+export function resolveCityCoordinates(
+  city: string | null,
+  country: string | null,
+  timezone?: string | null
+): ResolvedCoordinates | null {
   if (!city || !country) return null
   const wantedCity = normalize(city)
   const wantedCountry = normalize(country)
@@ -48,7 +52,9 @@ export function resolveCityCoordinates(city: string | null, country: string | nu
   const matches = VALID.filter((r) => normalize(r.city) === wantedCity && normalize(r.country) === wantedCountry)
   if (matches.length === 0) return null
 
-  const best = matches.reduce((a, b) => ((b.pop ?? 0) > (a.pop ?? 0) ? b : a))
+  // Same tie-break as the portal's resolveGeoLocation: the saved zone first, then population.
+  const byTimezone = timezone ? matches.filter((r) => r.timezone === timezone) : []
+  const best = (byTimezone.length > 0 ? byTimezone : matches).reduce((a, b) => ((b.pop ?? 0) > (a.pop ?? 0) ? b : a))
   return { latitude: best.lat, longitude: best.lng, timezone: best.timezone }
 }
 

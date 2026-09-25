@@ -1,11 +1,11 @@
 import { prisma } from "./db.js"
 import { pushActivity } from "./activity.js"
 import { pushToAgent } from "./agent-registry.js"
-import { resolvePrayerLocation } from "./prayer-location.js"
+import { resolveCityCoordinates } from "./geo.js"
 import { getTimingsForDate } from "./prayer-times.js"
 import { calendarDateKey, todayInTimeZone, zonedTimeToUtc } from "./timezone-math.js"
 import { PRAYER_NAMES, type PrayerName } from "./constants.js"
-import type { Prisma, PrayerConfig, Zone } from "@prisma/client"
+import type { Location, Prisma, PrayerConfig, Zone } from "@prisma/client"
 
 /**
  * Cloud-side Prayer Mode execution: pauses participating zones when a
@@ -16,9 +16,9 @@ import type { Prisma, PrayerConfig, Zone } from "@prisma/client"
  * tab being closed must never stop a venue's prayer pauses.
  *
  * Design notes:
- *  - Everything is evaluated against the *venue's* clock, resolved per
- *    organization (lib/prayer-location.ts): the venue PC's reported IANA
- *    zone, else its Location's. The cloud host's timezone is never used.
+ *  - Everything is evaluated per zone Location, with the same city lookup
+ *    and AlAdhan times the zone cards show (lib/geo.ts, the backend half of
+ *    src/lib/geo/locations.ts). The cloud host's timezone is never used.
  *  - A tick only acts inside a prayer's pause window. A prayer whose window
  *    already closed is marked fired without acting, so a backend restart
  *    late in the day never replays the day's prayers.
@@ -38,8 +38,11 @@ const TICK_MS = 30_000
  * commands are attributed honestly instead of borrowing a real admin. */
 const SCHEDULER_ISSUER = "prayer-scheduler"
 
-/** `${organizationId}:${dateKey}:${prayer}:start|end` */
+/** `${organizationId}:${dateKey}:${locationId}:${prayer}:start|end` */
 const fired = new Set<string>()
+
+/** Locations already warned about, so an unknown city logs once, not every tick. */
+const warnedLocations = new Set<string>()
 
 interface PrayerSettings {
   enabled: boolean
@@ -94,7 +97,7 @@ async function issueZoneCommand(zone: Zone, type: "PAUSE" | "PLAY", payload: Pri
   ])
 }
 
-async function firePrayerStart(config: PrayerConfig, prayer: PrayerName) {
+async function firePrayerStart(config: PrayerConfig, prayer: PrayerName, locationId: string) {
   // Only zones that opted in and are actually playing: a zone a manager had
   // already paused or stopped is never touched, so it can never be
   // "resumed" into playing by the end of a prayer it was never part of.
@@ -102,6 +105,7 @@ async function firePrayerStart(config: PrayerConfig, prayer: PrayerName) {
     where: {
       prayerModeEnabled: true,
       playbackState: "PLAYING",
+      locationId,
       server: { organizationId: config.organizationId },
     },
   })
@@ -125,9 +129,9 @@ async function firePrayerStart(config: PrayerConfig, prayer: PrayerName) {
   })
 }
 
-async function firePrayerEnd(config: PrayerConfig, prayer: PrayerName) {
+async function firePrayerEnd(config: PrayerConfig, prayer: PrayerName, locationId: string) {
   const zones = await prisma.zone.findMany({
-    where: { pausedByPrayer: prayer, server: { organizationId: config.organizationId } },
+    where: { pausedByPrayer: prayer, locationId, server: { organizationId: config.organizationId } },
   })
 
   let resumed = 0
@@ -160,13 +164,43 @@ async function firePrayerEnd(config: PrayerConfig, prayer: PrayerName) {
   })
 }
 
+/** One pass per Location that has zones in this organization — so each
+ * zone pauses on its own Location's times, and AlAdhan is asked once per
+ * Location, never once per zone. */
+export async function tickOrganization(config: PrayerConfig, now: Date): Promise<string[]> {
+  const places = await prisma.location.findMany({
+    where: { zones: { some: { server: { organizationId: config.organizationId } } } },
+    select: { id: true, name: true, city: true, country: true, timezone: true },
+  })
+  const dateKeys: string[] = []
+  for (const place of places) {
+    const dateKey = await tickLocation(config, place, now)
+    if (dateKey) dateKeys.push(dateKey)
+  }
+  return dateKeys
+}
+
 /** Returns the venue-local date key it evaluated, so the caller can prune
  * stale `fired` entries without resolving the location a second time. */
-async function tickOrganization(config: PrayerConfig, now: Date): Promise<string | null> {
-  const location = await resolvePrayerLocation(config)
+async function tickLocation(
+  config: PrayerConfig,
+  place: Pick<Location, "id" | "name" | "city" | "country" | "timezone">,
+  now: Date
+): Promise<string | null> {
+  // The same lookup the zone cards use (src/lib/geo/locations.ts resolveGeoLocation).
+  const location = resolveCityCoordinates(place.city, place.country, place.timezone)
   // No usable coordinates: stay idle rather than calculate against a point
-  // nobody chose. The times endpoint reports the same condition to the UI.
-  if (!location) return null
+  // nobody chose. The zone cards report the same condition to the UI.
+  if (!location) {
+    if (!warnedLocations.has(place.id)) {
+      warnedLocations.add(place.id)
+      console.warn(`[prayer-scheduler] Location "${place.name}" (${place.city}, ${place.country}) has no known coordinates — its zones are skipped.`)
+    }
+    // Never paused here again, but a zone already paused for prayer must not be stranded.
+    for (const prayer of PRAYER_NAMES) await firePrayerEndIfZonesStillPaused(config, prayer, place.id)
+    return null
+  }
+  warnedLocations.delete(place.id)
 
   const today = todayInTimeZone(location.timezone, now)
   const dateKey = calendarDateKey(today)
@@ -181,8 +215,8 @@ async function tickOrganization(config: PrayerConfig, now: Date): Promise<string
       zonedTimeToUtc(today, timings[prayer], location.timezone).getTime() + settings.offsetMinutes * 60_000
     )
     const endAt = new Date(startAt.getTime() + settings.pauseDurationMinutes * 60_000)
-    const startKey = `${config.organizationId}:${dateKey}:${prayer}:start`
-    const endKey = `${config.organizationId}:${dateKey}:${prayer}:end`
+    const startKey = `${config.organizationId}:${dateKey}:${place.id}:${prayer}:start`
+    const endKey = `${config.organizationId}:${dateKey}:${place.id}:${prayer}:end`
 
     if (now < startAt) continue
 
@@ -191,8 +225,8 @@ async function tickOrganization(config: PrayerConfig, now: Date): Promise<string
       // simply have been missed); otherwise just record it as done so a
       // restart doesn't replay a prayer hours after the fact.
       if (!fired.has(endKey)) {
-        if (fired.has(startKey)) await firePrayerEnd(config, prayer)
-        else await firePrayerEndIfZonesStillPaused(config, prayer)
+        if (fired.has(startKey)) await firePrayerEnd(config, prayer, place.id)
+        else await firePrayerEndIfZonesStillPaused(config, prayer, place.id)
         fired.add(startKey)
         fired.add(endKey)
       }
@@ -202,7 +236,7 @@ async function tickOrganization(config: PrayerConfig, now: Date): Promise<string
     // Inside the pause window.
     if (!fired.has(startKey)) {
       fired.add(startKey)
-      await firePrayerStart(config, prayer)
+      await firePrayerStart(config, prayer, place.id)
     }
   }
 
@@ -211,11 +245,11 @@ async function tickOrganization(config: PrayerConfig, now: Date): Promise<string
 
 /** Covers a restart mid-prayer: the in-memory record of the start is gone,
  * but zones still carry `pausedByPrayer`, so they must still be resumed. */
-async function firePrayerEndIfZonesStillPaused(config: PrayerConfig, prayer: PrayerName) {
+async function firePrayerEndIfZonesStillPaused(config: PrayerConfig, prayer: PrayerName, locationId: string) {
   const stillPaused = await prisma.zone.count({
-    where: { pausedByPrayer: prayer, server: { organizationId: config.organizationId } },
+    where: { pausedByPrayer: prayer, locationId, server: { organizationId: config.organizationId } },
   })
-  if (stillPaused > 0) await firePrayerEnd(config, prayer)
+  if (stillPaused > 0) await firePrayerEnd(config, prayer, locationId)
 }
 
 /** Keeps `fired` from growing without bound — yesterday's keys can never
@@ -234,8 +268,7 @@ export function startPrayerScheduler() {
       const now = new Date()
       const activeDateKeys = new Set<string>()
       for (const config of configs) {
-        const dateKey = await tickOrganization(config, now)
-        if (dateKey) activeDateKeys.add(dateKey)
+        for (const dateKey of await tickOrganization(config, now)) activeDateKeys.add(dateKey)
       }
       pruneFired(activeDateKeys)
     } catch {
