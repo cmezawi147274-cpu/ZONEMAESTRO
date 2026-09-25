@@ -6,7 +6,7 @@ import { can } from "../lib/rbac.js"
 import { forbidden, notFound } from "../lib/http-error.js"
 import { queuePlaylistTracksForServer } from "../lib/zone-effects.js"
 import { audit } from "../lib/audit.js"
-import { scopedPlaylist, scopedAssignmentTarget, canMutateOwned } from "../lib/tenant.js"
+import { scopedPlaylist, scopedAssignmentTarget, canMutateOwned, playlistVisibilityWhere } from "../lib/tenant.js"
 import type { PlaylistTargetType } from "@prisma/client"
 
 async function withTrackIds(playlistId: string): Promise<string[]> {
@@ -54,7 +54,7 @@ export default async function playlistsRoutes(app: FastifyInstance) {
     if (scope.isSuperAdmin) {
       if (organizationId) where = { OR: [{ organizationId }, { organizationId: null }] }
     } else {
-      where = { OR: [{ organizationId: scope.organizationId }, { organizationId: null }] }
+      where = playlistVisibilityWhere(scope)
     }
     const playlists = await prisma.playlist.findMany({ where, orderBy: { name: "asc" } })
     const items = await Promise.all(playlists.map(async (p) => toPlaylist(p, await withTrackIds(p.id))))
@@ -65,11 +65,7 @@ export default async function playlistsRoutes(app: FastifyInstance) {
     const user = requireUser(request)
     if (!can(user.role, "playlist:read")) throw forbidden()
     const scope = tenantScope(request)
-    const playlist = await prisma.playlist.findUnique({ where: { id: request.params.id } })
-    if (!playlist) throw notFound("Playlist")
-    if (!scope.isSuperAdmin && playlist.organizationId !== null && playlist.organizationId !== scope.organizationId) {
-      throw notFound("Playlist")
-    }
+    const playlist = await scopedPlaylist(scope, request.params.id)
     return reply.send(toPlaylist(playlist, await withTrackIds(playlist.id)))
   })
 
@@ -157,9 +153,10 @@ export default async function playlistsRoutes(app: FastifyInstance) {
     "/playlists/:id/assign",
     async (request, reply) => {
       const user = requireUser(request)
-      if (!can(user.role, "playlist:write")) throw forbidden()
+      if (!can(user.role, "zone:assign")) throw forbidden()
       const scope = tenantScope(request)
       const { targetType, targetId } = request.body
+      if (!scope.isSuperAdmin && targetType !== "ZONE") throw forbidden()
       const playlist = await scopedPlaylist(scope, request.params.id)
       await scopedAssignmentTarget(scope, targetType, targetId)
 

@@ -25,7 +25,8 @@ import { useAuth } from "@/hooks/use-auth"
 import { useZoneControls, useAssignZonePlaylist, useZonePlaylists, useDeleteZone } from "@/hooks/use-zones"
 import { useSetZonePrayerParticipation } from "@/hooks/use-prayer"
 import { useSchedules } from "@/hooks/use-schedules"
-import { useTracks } from "@/hooks/use-music"
+import { useTracksByIds } from "@/hooks/use-music"
+import { usePlaylists } from "@/hooks/use-playlists"
 import { ZonePlaylistDialog } from "@/components/zones/zone-playlist-dialog"
 import { ZoneScheduleDialog } from "@/components/zones/zone-schedule-dialog"
 import { ZoneVolumeRow } from "@/components/zones/zone-volume-row"
@@ -57,7 +58,7 @@ export function ZoneCard({
   showLocation?: string
   todayPrayerTimes?: ZonePrayerTimesInfo
 }) {
-  const { can } = useAuth()
+  const { can, role } = useAuth()
   const canAssign = can("zone:assign")
   const canReadMusic = can("music:read")
   const canReadSchedule = can("schedule:read")
@@ -71,9 +72,12 @@ export function ZoneCard({
   // not zone:assign — a playback-only Viewer still needs playlist names to
   // read the schedule block below.
   const { data: playlists } = useZonePlaylists(zone.id)
+  // Managers pick from every playlist they can see; the super admin keeps the per-zone list.
+  const { data: visiblePlaylists } = usePlaylists(undefined, { enabled: canAssign && role !== "SUPER_ADMIN" })
+  const pickerPlaylists = role === "SUPER_ADMIN" ? playlists : visiblePlaylists
   // A playback-only role holds neither playlist:read nor music:read; don't
   // fire queries whose 403 it can do nothing about.
-  const { data: tracks } = useTracks(undefined, { enabled: canReadMusic })
+  const { data: tracks } = useTracksByIds(zone.currentTrackId ? [zone.currentTrackId] : undefined, { enabled: canReadMusic })
   // A playback-only Viewer holds no schedule:read either — same guard as
   // playlists/tracks above, and the block below stays behind the same
   // RoleGate so it's not offered without the data to back it.
@@ -331,18 +335,18 @@ export function ZoneCard({
         </RoleGate>
 
         <RoleGate permission="zone:assign">
-          {playlists && playlists.length > 0 ? (
+          {pickerPlaylists && pickerPlaylists.length > 0 ? (
             <Select
               value={zone.currentPlaylistId ?? undefined}
               onValueChange={(playlistId) => playlistId && assignPlaylist.mutate({ zoneId: zone.id, playlistId })}
-              items={Object.fromEntries(playlists.map((p) => [p.id, p.name]))}
+              items={Object.fromEntries(pickerPlaylists.map((p) => [p.id, p.name]))}
               disabled={offline}
             >
               <SelectTrigger className="w-full" size="sm">
                 <SelectValue placeholder="Assign playlist" />
               </SelectTrigger>
               <SelectContent>
-                {playlists.map((p) => (
+                {pickerPlaylists.map((p) => (
                   <SelectItem key={p.id} value={p.id}>
                     {p.name}
                   </SelectItem>

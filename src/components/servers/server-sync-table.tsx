@@ -6,12 +6,12 @@ import { SyncStatusBadge } from "@/components/common/status-badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Progress } from "@/components/ui/progress"
 import { Button } from "@/components/ui/button"
-import { useTracks } from "@/hooks/use-music"
+import { useTracksByIds } from "@/hooks/use-music"
 import { useRetrySync } from "@/hooks/use-sync"
 import type { TrackSyncState } from "@/lib/api/types"
 
 export function ServerSyncTable({ states, isLoading }: { states?: TrackSyncState[]; isLoading?: boolean }) {
-  const { data: tracks } = useTracks()
+  const { data: tracks } = useTracksByIds(states?.map((s) => s.trackId))
   const retry = useRetrySync()
 
   if (isLoading) return <p className="text-sm text-muted-foreground">Loading sync status…</p>

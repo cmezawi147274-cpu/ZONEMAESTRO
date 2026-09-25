@@ -16,7 +16,7 @@ import {
 import { EmptyState } from "@/components/common/empty-state"
 import { RoleGate } from "@/components/common/role-gate"
 import { usePlaylists } from "@/hooks/use-playlists"
-import { useTracks } from "@/hooks/use-music"
+import { useTracksByIds } from "@/hooks/use-music"
 import { useRemoveTrackFromZone, useRestoreTrackForZone } from "@/hooks/use-zones"
 import { formatDuration } from "@/lib/format"
 import type { Zone } from "@/lib/api/types"
@@ -24,11 +24,11 @@ import type { Zone } from "@/lib/api/types"
 export function ZonePlaylistDialog({ zone, trigger }: { zone: Zone; trigger: React.ReactElement }) {
   const [open, setOpen] = useState(false)
   const { data: playlists } = usePlaylists()
-  const { data: tracks } = useTracks()
   const removeTrack = useRemoveTrackFromZone()
   const restoreTrack = useRestoreTrackForZone()
 
   const playlist = playlists?.find((p) => p.id === zone.currentPlaylistId)
+  const { data: tracks } = useTracksByIds(playlist?.trackIds)
   const included = (playlist?.trackIds ?? []).filter((id) => !zone.excludedTrackIds.includes(id))
   const excluded = zone.excludedTrackIds.filter((id) => playlist?.trackIds.includes(id))
   const trackById = (id: string) => tracks?.find((t) => t.id === id)

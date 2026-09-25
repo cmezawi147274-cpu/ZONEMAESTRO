@@ -9,7 +9,7 @@ import { requireAuth, requireUser, tenantScope } from "../lib/auth-context.js"
 import { can } from "../lib/rbac.js"
 import { forbidden, notFound, badRequest } from "../lib/http-error.js"
 import { env } from "../lib/env.js"
-import { libraryReadWhere, canMutateOwned, owningOrganizationId, scopedServer } from "../lib/tenant.js"
+import { libraryReadWhere, canMutateOwned, owningOrganizationId, scopedServer, assertVisibleTrackIds } from "../lib/tenant.js"
 import { audit } from "../lib/audit.js"
 
 /**
@@ -71,7 +71,7 @@ export default async function musicRoutes(app: FastifyInstance) {
   // "folders" isn't parsed as a track id.
   app.get("/music/folders", async (request, reply) => {
     const user = requireUser(request)
-    if (!can(user.role, "music:read")) throw forbidden()
+    if (!can(user.role, "music:library")) throw forbidden()
     const folders = await prisma.musicFolder.findMany({
       where: libraryReadWhere(tenantScope(request)),
       orderBy: { createdAt: "asc" },
@@ -123,6 +123,11 @@ export default async function musicRoutes(app: FastifyInstance) {
       const user = requireUser(request)
       if (!can(user.role, "music:read")) throw forbidden()
       const { search, genre, limit, cursor, ids } = request.query
+      // Without the full catalogue, only an exact ids list of songs this caller can already see.
+      if (!can(user.role, "music:library")) {
+        if (!ids || search || genre || limit || cursor) throw forbidden()
+        await assertVisibleTrackIds(tenantScope(request), ids.split(",").map((x) => x.trim()).filter(Boolean).slice(0, MAX_LIMIT))
+      }
       const filters: Record<string, unknown>[] = [libraryReadWhere(tenantScope(request))]
       // Resolve an explicit set of ids. Callers that hold track ids — a
       // playlist's contents, a zone's current track, a sync queue — need
@@ -275,7 +280,7 @@ export default async function musicRoutes(app: FastifyInstance) {
 
   app.get<{ Params: { id: string } }>("/music/:id", async (request, reply) => {
     const user = requireUser(request)
-    if (!can(user.role, "music:read")) throw forbidden()
+    if (!can(user.role, "music:library")) throw forbidden()
     const track = await prisma.track.findFirst({
       where: { AND: [{ id: request.params.id }, libraryReadWhere(tenantScope(request))] },
     })

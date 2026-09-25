@@ -101,6 +101,19 @@ export async function scopedServer(scope: TenantScope, serverId: string) {
   return server
 }
 
+/** Playlists this caller may see. Assignment is Zone.currentPlaylistId only (the `zones` relation). */
+export function playlistVisibilityWhere(scope: TenantScope): Record<string, unknown> {
+  if (scope.isSuperAdmin) return {}
+  if (scope.locationId) return { zones: { some: { locationId: scope.locationId } } }
+  if (!scope.organizationId) return { id: { in: [] } }
+  return {
+    OR: [
+      { organizationId: scope.organizationId },
+      { zones: { some: { location: { organizationId: scope.organizationId } } } },
+    ],
+  }
+}
+
 /**
  * Loads a Playlist the caller is entitled to read, or 404s. Playlists use
  * the same shared-catalogue rule as tracks.
@@ -109,10 +122,28 @@ export async function scopedPlaylist(scope: TenantScope, playlistId: string) {
   const playlist = await prisma.playlist.findUnique({ where: { id: playlistId } })
   if (!playlist) throw notFound("Playlist")
   if (scope.isSuperAdmin) return playlist
-  if (playlist.organizationId !== null && playlist.organizationId !== scope.organizationId) {
-    throw notFound("Playlist")
-  }
+  const visible = await prisma.playlist.count({ where: { AND: [{ id: playlist.id }, playlistVisibilityWhere(scope)] } })
+  if (!visible) throw notFound("Playlist")
   return playlist
+}
+
+/** 403 unless every id is on a visible playlist, synced to a visible server, or playing on a visible zone. */
+export async function assertVisibleTrackIds(scope: TenantScope, trackIds: string[]) {
+  const unique = Array.from(new Set(trackIds))
+  if (unique.length === 0) return
+  const serverWhere = scope.locationId ? { locationId: scope.locationId } : { organizationId: scope.organizationId ?? "" }
+  const zoneWhere = scope.locationId ? { locationId: scope.locationId } : { location: { organizationId: scope.organizationId ?? "" } }
+  const [onPlaylists, synced, playing] = await Promise.all([
+    prisma.playlistTrack.findMany({ where: { trackId: { in: unique }, playlist: playlistVisibilityWhere(scope) }, select: { trackId: true } }),
+    prisma.trackSyncState.findMany({ where: { trackId: { in: unique }, server: serverWhere }, select: { trackId: true } }),
+    prisma.zone.findMany({ where: { currentTrackId: { in: unique }, ...zoneWhere }, select: { currentTrackId: true } }),
+  ])
+  const allowed = new Set<string | null>([
+    ...onPlaylists.map((r) => r.trackId),
+    ...synced.map((r) => r.trackId),
+    ...playing.map((r) => r.currentTrackId),
+  ])
+  if (unique.some((id) => !allowed.has(id))) throw forbidden()
 }
 
 /**

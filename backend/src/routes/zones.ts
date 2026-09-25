@@ -7,7 +7,7 @@ import { forbidden, notFound, badRequest } from "../lib/http-error.js"
 import { queuePlaylistTracksForServer } from "../lib/zone-effects.js"
 import { pushToAgent } from "../lib/agent-registry.js"
 import { pushActivity } from "../lib/activity.js"
-import { scopedPlaylist, libraryReadWhere } from "../lib/tenant.js"
+import { scopedPlaylist, playlistVisibilityWhere } from "../lib/tenant.js"
 
 async function allowedLocationIds(organizationId: string) {
   const locs = await prisma.location.findMany({ where: { organizationId }, select: { id: true } })
@@ -80,7 +80,7 @@ export default async function zonesRoutes(app: FastifyInstance) {
     if (zone.currentPlaylistId) ids.add(zone.currentPlaylistId)
     if (ids.size === 0) return reply.send([])
     const playlists = await prisma.playlist.findMany({
-      where: { AND: [{ id: { in: Array.from(ids) } }, libraryReadWhere(scope)] },
+      where: { AND: [{ id: { in: Array.from(ids) } }, playlistVisibilityWhere(scope)] },
       orderBy: { name: "asc" },
     })
     const items = await Promise.all(

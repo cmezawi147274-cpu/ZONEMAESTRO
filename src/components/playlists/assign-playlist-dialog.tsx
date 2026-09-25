@@ -18,6 +18,7 @@ import { useLocations } from "@/hooks/use-locations"
 import { useServers } from "@/hooks/use-servers"
 import { useZones } from "@/hooks/use-zones"
 import { useAssignPlaylist } from "@/hooks/use-playlists"
+import { useAuth } from "@/hooks/use-auth"
 
 const STEPS = [
   { field: "organizationId", label: "Organization", placeholder: "Select organization" },
@@ -36,15 +37,18 @@ type StepField = (typeof STEPS)[number]["field"]
  * options are filtered from the lists already loaded by the hooks below —
  * no new queries per step. */
 export function AssignPlaylistDialog({ playlistId }: { playlistId: string }) {
+  const { user, can } = useAuth()
+  // Without org:read (a location manager) there is no organization list; his own is pre-selected.
+  const ownOrganizationId = can("org:read") ? "" : (user?.organizationId ?? "")
   const [open, setOpen] = useState(false)
   const [step, setStep] = useState(0)
   const [selection, setSelection] = useState<Record<StepField, string>>({
-    organizationId: "",
+    organizationId: ownOrganizationId,
     locationId: "",
     serverId: "",
     zoneId: "",
   })
-  const { data: organizations } = useOrganizations()
+  const { data: organizations } = useOrganizations({ enabled: can("org:read") })
   const { data: locations } = useLocations()
   const { data: servers } = useServers()
   const { data: zones } = useZones()
@@ -75,7 +79,7 @@ export function AssignPlaylistDialog({ playlistId }: { playlistId: string }) {
 
   function reset() {
     setStep(0)
-    setSelection({ organizationId: "", locationId: "", serverId: "", zoneId: "" })
+    setSelection({ organizationId: ownOrganizationId, locationId: "", serverId: "", zoneId: "" })
   }
 
   function pick(id: string) {

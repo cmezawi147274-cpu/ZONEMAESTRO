@@ -54,12 +54,14 @@ export default function PlaylistDetailPage(props: PageProps<"/playlists/[id]">) 
           title={playlist.name}
           description={`${playlist.description || "No description"} · ${trackList.length} tracks · ${formatDuration(totalDuration)}`}
           actions={
-            <RoleGate permission="playlist:write">
-              <div className="flex gap-2">
+            <div className="flex gap-2">
+              <RoleGate permission="zone:assign">
                 <AssignPlaylistDialog playlistId={playlist.id} />
+              </RoleGate>
+              <RoleGate permission="music:library">
                 <AddTracksDialog playlist={playlist} />
-              </div>
-            </RoleGate>
+              </RoleGate>
+            </div>
           }
         />
       </div>
