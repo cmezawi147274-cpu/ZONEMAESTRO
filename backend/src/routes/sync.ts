@@ -5,7 +5,7 @@ import { requireAuth, requireUser, tenantScope } from "../lib/auth-context.js"
 import { can } from "../lib/rbac.js"
 import { forbidden, notFound, badRequest } from "../lib/http-error.js"
 import { pushActivity } from "../lib/activity.js"
-import { scopedServer, scopedServerIds, scopedTrackIds, allowedLocationIds, assertVisibleTrackIds } from "../lib/tenant.js"
+import { scopedServer, scopedServerIds, scopedTrackIds, allowedLocationIds } from "../lib/tenant.js"
 
 /** Ceiling on one queue request. Without it a single call could fan out to
  * an unbounded number of (track x server) rows in one transaction. */
@@ -64,7 +64,6 @@ export default async function syncRoutes(app: FastifyInstance) {
     // id — including another tenant's — could be named as the payload.
     const servers = await scopedServerIds(scope, serverIds)
     const tracks = await scopedTrackIds(scope, trackIds)
-    if (!scope.isSuperAdmin) await assertVisibleTrackIds(scope, tracks)
 
     const created: ReturnType<typeof toTrackSyncState>[] = []
 

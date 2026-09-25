@@ -28,14 +28,7 @@ export function useTracksByIds(ids: string[] | undefined, options?: { enabled?: 
   const key = (ids ?? []).join(",")
   return useQuery({
     queryKey: ["music", "by-ids", key],
-    queryFn: async () => {
-      const all = ids ?? []
-      if (all.length <= 500) return musicApi.list({ ids: key })
-      // The backend reads at most 500 ids per request.
-      const parts: Promise<Awaited<ReturnType<typeof musicApi.list>>>[] = []
-      for (let i = 0; i < all.length; i += 500) parts.push(musicApi.list({ ids: all.slice(i, i + 500).join(",") }))
-      return (await Promise.all(parts)).flat()
-    },
+    queryFn: () => musicApi.list({ ids: key }),
     enabled: (options?.enabled ?? true) && key.length > 0,
   })
 }

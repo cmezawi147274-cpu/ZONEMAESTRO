@@ -16,15 +16,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { QueueSyncDialog } from "@/components/sync/queue-sync-dialog"
 import { useSyncStates, useRetrySync } from "@/hooks/use-sync"
 import { useServers } from "@/hooks/use-servers"
-import { useTracksByIds } from "@/hooks/use-music"
+import { useTracks } from "@/hooks/use-music"
 import { SYNC_STATUS_LABELS, type SyncStatus } from "@/lib/constants"
 
 export default function SyncPage() {
   const [serverFilter, setServerFilter] = useState("all")
   const [statusFilter, setStatusFilter] = useState("all")
   const { data: servers } = useServers()
+  const { data: tracks } = useTracks()
   const { data: syncStates, isLoading } = useSyncStates(serverFilter === "all" ? undefined : { serverId: serverFilter })
-  const { data: tracks } = useTracksByIds(Array.from(new Set((syncStates ?? []).map((s) => s.trackId))))
   const retry = useRetrySync()
 
   const filtered = (syncStates ?? []).filter((s) => statusFilter === "all" || s.status === statusFilter)
@@ -54,7 +54,7 @@ export default function SyncPage() {
         title="Music Synchronization"
         description="Cloud-to-local download status for every Windows MusicServer."
         actions={
-          <RoleGate permission="music:library">
+          <RoleGate permission="sync:trigger">
             <QueueSyncDialog />
           </RoleGate>
         }

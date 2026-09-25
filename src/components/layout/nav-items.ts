@@ -51,7 +51,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: "Content",
     items: [
-      { label: "Music Library", href: "/music", icon: Library, permission: "music:library" },
+      { label: "Music Library", href: "/music", icon: Library, permission: "music:read" },
       { label: "Playlists", href: "/playlists", icon: ListMusic, permission: "playlist:read" },
       { label: "Scheduling", href: "/schedules", icon: CalendarClock, permission: "schedule:read" },
       { label: "Prayer Mode", href: "/prayer", icon: Moon, permission: "prayer:read" },

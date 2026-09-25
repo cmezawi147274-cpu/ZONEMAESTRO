@@ -21,8 +21,6 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useCreateSchedule, useUpdateSchedule } from "@/hooks/use-schedules"
 import { useZones, useZonePlaylists } from "@/hooks/use-zones"
-import { usePlaylists } from "@/hooks/use-playlists"
-import { useAuth } from "@/hooks/use-auth"
 import { DAYS_OF_WEEK, type DayOfWeek } from "@/lib/constants"
 import { cn } from "@/lib/utils"
 import type { Schedule } from "@/lib/api/types"
@@ -87,10 +85,6 @@ export function ScheduleFormDialog({
   // re-narrows when they change it.
   const selectedZoneId = form.watch("zoneId")
   const { data: playlists } = useZonePlaylists(selectedZoneId, { enabled: !!selectedZoneId })
-  // Managers pick from every playlist they can see; the super admin keeps the per-zone list.
-  const { role } = useAuth()
-  const { data: visiblePlaylists } = usePlaylists(undefined, { enabled: !!selectedZoneId && role !== "SUPER_ADMIN" })
-  const pickerPlaylists = role === "SUPER_ADMIN" ? playlists : visiblePlaylists
 
   useEffect(() => {
     if (!open) return
@@ -182,7 +176,7 @@ export function ScheduleFormDialog({
                     <Select
                       value={field.value}
                       onValueChange={field.onChange}
-                      items={Object.fromEntries((pickerPlaylists ?? []).map((p) => [p.id, p.name]))}
+                      items={Object.fromEntries((playlists ?? []).map((p) => [p.id, p.name]))}
                     >
                       <FormControl>
                         <SelectTrigger className="w-full">
@@ -190,7 +184,7 @@ export function ScheduleFormDialog({
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        {pickerPlaylists?.map((p) => (
+                        {playlists?.map((p) => (
                           <SelectItem key={p.id} value={p.id}>
                             {p.name}
                           </SelectItem>
