@@ -54,7 +54,7 @@ export default function SyncPage() {
         title="Music Synchronization"
         description="Cloud-to-local download status for every Windows MusicServer."
         actions={
-          <RoleGate permission="sync:trigger">
+          <RoleGate permission="music:library">
             <QueueSyncDialog />
           </RoleGate>
         }

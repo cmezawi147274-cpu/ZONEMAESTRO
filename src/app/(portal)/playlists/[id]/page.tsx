@@ -57,7 +57,7 @@ export default function PlaylistDetailPage(props: PageProps<"/playlists/[id]">) 
             <RoleGate permission="playlist:write">
               <div className="flex gap-2">
                 <AssignPlaylistDialog playlistId={playlist.id} />
-                <AddTracksDialog playlist={playlist} />
+                <RoleGate permission="music:library"><AddTracksDialog playlist={playlist} /></RoleGate>
               </div>
             </RoleGate>
           }
@@ -81,7 +81,7 @@ export default function PlaylistDetailPage(props: PageProps<"/playlists/[id]">) 
                     </p>
                   </div>
                   <span className="text-xs tabular-nums text-muted-foreground">{formatDuration(track!.durationSec)}</span>
-                  <RoleGate permission="playlist:write">
+                  <RoleGate permission="music:library">
                     <div className="flex items-center gap-0.5">
                       <Button variant="ghost" size="icon-xs" disabled={index === 0} onClick={() => move(index, -1)}>
                         <ArrowUp className="size-3.5" />

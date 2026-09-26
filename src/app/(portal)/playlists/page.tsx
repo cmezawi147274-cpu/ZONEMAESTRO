@@ -47,7 +47,7 @@ export default function PlaylistsPage() {
         title="Playlists"
         description="Build playlists and assign them to organizations, locations, Music Servers or zones."
         actions={
-          <RoleGate permission="playlist:write">
+          <RoleGate permission="music:library">
             <CreatePlaylistDialog />
           </RoleGate>
         }
@@ -98,7 +98,7 @@ export default function PlaylistsPage() {
                   <Badge variant="secondary">{playlist.trackIds.length} tracks</Badge>
                   <Badge variant="outline">{orgName(playlist.organizationId)}</Badge>
                 </div>
-                <RoleGate permission="playlist:write">
+                <RoleGate permission="music:library">
                   <div className="flex justify-end gap-1">
                     <Button variant="ghost" size="icon-sm" onClick={() => duplicate.mutate(playlist.id)}>
                       <Copy className="size-3.5" />

@@ -22,6 +22,8 @@ export type Permission =
    * transport without being able to reassign content. */
   | "zone:assign"
   | "music:read"
+  /** Portal-only screen gate (SUPER_ADMIN); no backend counterpart. */
+  | "music:library"
   | "music:upload"
   | "music:delete"
   | "playlist:read"
@@ -60,6 +62,7 @@ const MATRIX: Record<Role, Permission[]> = {
     "zone:override",
     "server:forget",
     "music:read",
+    "music:library",
     "music:upload",
     "music:delete",
     "playlist:read",
