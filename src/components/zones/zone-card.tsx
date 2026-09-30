@@ -176,7 +176,10 @@ export function ZoneCard({
                   {track.artist} · {playlist?.name}
                 </p>
               </>
-            ) : zone.currentTrackId ? (
+            ) : zone.currentTrackId || zone.currentPlaylistId ? (
+              // Keyed on the assignment itself (currentPlaylistId, which both
+              // assign routes save) as well as the current track, which can be
+              // empty while a playlist is assigned.
               <p className="text-sm text-muted-foreground">Playing from the assigned playlist</p>
             ) : (
               <p className="text-sm text-muted-foreground">No playlist assigned</p>
@@ -343,6 +346,8 @@ export function ZoneCard({
         </RoleGate>
 
         <RoleGate permission="zone:assign">
+          {/* "No playlist assigned" only once the list has loaded, and never
+              while the zone itself carries an assignment (currentPlaylistId). */}
           {playlists && playlists.length > 0 ? (
             <Select
               value={zone.currentPlaylistId ?? undefined}
@@ -361,7 +366,7 @@ export function ZoneCard({
                 ))}
               </SelectContent>
             </Select>
-          ) : (
+          ) : zone.currentPlaylistId || !playlists ? null : (
             <p className="rounded-md border px-2.5 py-1.5 text-center text-xs text-muted-foreground">
               No playlist assigned
             </p>
