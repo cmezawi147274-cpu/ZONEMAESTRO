@@ -142,6 +142,24 @@ export const zonesApi = {
     return apiClient.post<Zone>(`/zones/${zoneId}/tracks/${trackId}/restore`)
   },
 
+  /** Saves this zone's crossfade. A stored setting, not a command: the venue
+   * picks it up on its next zone-playlist sync, so it needs no live agent.
+   * `null` clears it (unset, which is off). */
+  async setZoneCrossfade(zoneId: string, value: Zone["crossfade"]): Promise<Zone> {
+    if (isMockMode) {
+      await delay(200)
+      const zone = store.zones.find((z) => z.id === zoneId)
+      if (!zone) throw new Error("Zone not found")
+      zone.crossfade = value ? { ...value } : null
+      zone.updatedAt = new Date().toISOString()
+      return { ...zone }
+    }
+    // apiClient sends no body at all for a falsy value, so a bare null would
+    // arrive as an empty request. An object whose toJSON() returns null
+    // serializes to the literal `null` the route expects.
+    return apiClient.put<Zone>(`/zones/${zoneId}/crossfade`, value ?? { toJSON: () => null })
+  },
+
   /** Every zone-facing transport control is dispatched as a remote command
    * to the zone's Windows MusicServer — the browser never plays or directly
    * mutates audio state. It applies immediately (success or error) for

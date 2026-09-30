@@ -1,12 +1,13 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { Play, Pause, Square, SkipBack, SkipForward, Moon, ListMusic, CalendarClock, SlidersHorizontal, Trash2 } from "lucide-react"
+import { Play, Pause, Square, SkipBack, SkipForward, Moon, ListMusic, CalendarClock, SlidersHorizontal, Trash2, Blend } from "lucide-react"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
+import { Slider } from "@/components/ui/slider"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -22,7 +23,7 @@ import { ZoneStateBadge } from "@/components/common/status-badge"
 import { RoleGate } from "@/components/common/role-gate"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useAuth } from "@/hooks/use-auth"
-import { useZoneControls, useAssignZonePlaylist, useZonePlaylists, useDeleteZone } from "@/hooks/use-zones"
+import { useZoneControls, useAssignZonePlaylist, useZonePlaylists, useDeleteZone, useSetZoneCrossfade } from "@/hooks/use-zones"
 import { useSetZonePrayerParticipation } from "@/hooks/use-prayer"
 import { useSchedules } from "@/hooks/use-schedules"
 import { useTracks } from "@/hooks/use-music"
@@ -336,6 +337,11 @@ export function ZoneCard({
           />
         </RoleGate>
 
+        {/* Same permission PUT /zones/:id/crossfade checks. */}
+        <RoleGate permission="zone:assign">
+          <ZoneCrossfadeRow zone={zone} />
+        </RoleGate>
+
         <RoleGate permission="zone:assign">
           {playlists && playlists.length > 0 ? (
             <Select
@@ -416,5 +422,76 @@ export function ZoneCard({
         </div>
       </CardContent>
     </Card>
+  )
+}
+
+/** What the slider shows before anything is saved, and the length turning
+ * the switch on sends when none has been saved yet. */
+const DEFAULT_CROSSFADE_MS = 4000
+
+/** Per-zone crossfade: a switch plus an overlap-length slider. It only stores
+ * a setting the venue picks up on its next zone-playlist sync; nothing here
+ * changes playback, and the helper text names the Music Server version that
+ * acts on it. */
+function ZoneCrossfadeRow({ zone }: { zone: Zone }) {
+  const setCrossfade = useSetZoneCrossfade()
+  // While a save is in flight, show the value being saved rather than the
+  // cached one; mid-drag, show the thumb's own position.
+  const saving = setCrossfade.isPending ? setCrossfade.variables?.value : undefined
+  const current = saving !== undefined ? saving : zone.crossfade
+  const enabled = current?.enabled ?? false
+  const durationMs = current?.durationMs ?? DEFAULT_CROSSFADE_MS
+  const [dragMs, setDragMs] = useState<number | null>(null)
+  // A drag cut short by the slider being disabled never commits, so its
+  // leftover position is ignored while off rather than shown.
+  const shownMs = enabled && dragMs !== null ? dragMs : durationMs
+
+  const save = (value: NonNullable<Zone["crossfade"]>) => setCrossfade.mutate({ zoneId: zone.id, value })
+  const first = (v: number | readonly number[]) => (Array.isArray(v) ? v[0] : v)
+
+  return (
+    <div className="space-y-1.5 rounded-md border px-2.5 py-1.5 text-[11px]">
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1.5 text-muted-foreground">
+          <Blend className="size-3" />
+          <span className="font-medium">Crossfade</span>
+        </span>
+        <Switch
+          checked={enabled}
+          disabled={setCrossfade.isPending}
+          aria-label="Crossfade"
+          // Off keeps the length, so turning it back on restores it.
+          onCheckedChange={(checked) => {
+            setDragMs(null)
+            save({ enabled: checked, durationMs })
+          }}
+        />
+      </div>
+      <div className="flex items-center gap-2">
+        <Slider
+          value={[shownMs]}
+          min={1000}
+          max={10000}
+          step={500}
+          // Base UI's default large step is 10, which would snap straight
+          // back here; PageUp/PageDown and Shift+arrow move a whole second.
+          largeStep={1000}
+          disabled={!enabled}
+          aria-label="Crossfade length"
+          onValueChange={(v: number | readonly number[]) => setDragMs(first(v))}
+          // Saved on release only, never on each drag tick.
+          onValueCommitted={(v: number | readonly number[]) => {
+            setDragMs(null)
+            const ms = Math.min(10000, Math.max(1000, Math.round(first(v) / 500) * 500))
+            if (ms !== durationMs) save({ enabled, durationMs: ms })
+          }}
+          className="flex-1"
+        />
+        <span className="w-10 text-right tabular-nums text-muted-foreground">{(shownMs / 1000).toFixed(1)} s</span>
+      </div>
+      <p className="text-muted-foreground">
+        Needs Music Server 1.0.14 on the venue PC. With older versions tracks change as before. Recommended overlap: 3–5 s.
+      </p>
+    </div>
   )
 }

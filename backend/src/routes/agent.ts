@@ -27,6 +27,7 @@ import { isValidTimeZone } from "../lib/geo.js"
 import { signedMediaUrl } from "../lib/media-url.js"
 import { ZONE_TRANSPORT_TYPES } from "./commands.js"
 import { ZONE_EFFECT_FIELD } from "../lib/zone-effects.js"
+import { toZoneCrossfade } from "../lib/serialize.js"
 import type { CommandStatus, ZonePlaybackState } from "@prisma/client"
 
 /** ASP.NET model binding is case-insensitive; the compiled agent's own
@@ -693,6 +694,9 @@ export default async function agentRoutes(app: FastifyInstance) {
             : [],
           excludedTrackIds: zone.excludedTrackIds,
           currentTrackId: zone.currentTrackId,
+          // PUT /zones/:id/crossfade's value, or null (unset or not a valid
+          // shape, which the venue treats as off). Older venue builds ignore it.
+          crossfade: toZoneCrossfade(zone.crossfade),
         }
       })
     )

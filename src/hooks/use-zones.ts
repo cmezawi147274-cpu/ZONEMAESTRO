@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { zonesApi } from "@/lib/api/zones"
 import { useAuth } from "@/hooks/use-auth"
 import { toast } from "sonner"
-import type { ZoneEqualizerSettings } from "@/lib/api/types"
+import type { Zone, ZoneEqualizerSettings } from "@/lib/api/types"
 
 export function useZones(filters?: { serverId?: string; locationId?: string }) {
   return useQuery({
@@ -148,6 +148,23 @@ export function useRestoreTrackForZone() {
       qc.invalidateQueries({ queryKey: ["zones"] })
       toast.success("Added back to this zone's playlist")
     },
+    onError: (e: Error) => toast.error(e.message),
+  })
+}
+
+/** Saves a zone's crossfade setting. Stored in the cloud and picked up by the
+ * venue on its next zone-playlist sync; it is not a command. */
+export function useSetZoneCrossfade() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ zoneId, value }: { zoneId: string; value: Zone["crossfade"] }) =>
+      zonesApi.setZoneCrossfade(zoneId, value),
+    // Keyboard steps commit one save per key press; run them one at a time so
+    // they cannot land at the server out of order.
+    scope: { id: "zone-crossfade" },
+    // Returned so the mutation stays pending until the refetch lands; the
+    // card shows the value being saved until then instead of snapping back.
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["zones"] }),
     onError: (e: Error) => toast.error(e.message),
   })
 }

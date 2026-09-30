@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify"
+import { Prisma } from "@prisma/client"
 import { prisma } from "../lib/db.js"
-import { toZone, toPlaylist } from "../lib/serialize.js"
+import { toZone, toPlaylist, isZoneCrossfade } from "../lib/serialize.js"
 import { requireAuth, requireUser, tenantScope, type TenantScope } from "../lib/auth-context.js"
 import { can } from "../lib/rbac.js"
 import { forbidden, notFound, badRequest } from "../lib/http-error.js"
@@ -159,6 +160,28 @@ export default async function zonesRoutes(app: FastifyInstance) {
     const zone = await scopedZone(tenantScope(request), request.params.id)
     const excludedTrackIds = zone.excludedTrackIds.filter((id) => id !== request.params.trackId)
     const updated = await prisma.zone.update({ where: { id: zone.id }, data: { excludedTrackIds } })
+    return reply.send(toZone(updated))
+  })
+
+  // --------------------------------------------------------------------
+  // Per-zone crossfade. A stored setting, not a command: the venue picks it
+  // up on its next POST /server/zone-playlists/sync, so this needs no live
+  // agent and no ack. Body is JSON null (clear it) or exactly
+  // { enabled, durationMs } — see lib/serialize.ts isZoneCrossfade. Anything
+  // else is a 400 and nothing is written. Only the crossfade column changes.
+  // --------------------------------------------------------------------
+  app.put<{ Params: { id: string }; Body: unknown }>("/zones/:id/crossfade", async (request, reply) => {
+    const user = requireUser(request)
+    if (!can(user.role, "zone:assign")) throw forbidden()
+    const zone = await scopedZone(tenantScope(request), request.params.id)
+    const body = request.body
+    if (body !== null && !isZoneCrossfade(body)) {
+      throw badRequest("Crossfade must be null or { enabled: boolean, durationMs: 1000-10000 in steps of 500 }.")
+    }
+    const updated = await prisma.zone.update({
+      where: { id: zone.id },
+      data: { crossfade: body === null ? Prisma.DbNull : { enabled: body.enabled, durationMs: body.durationMs } },
+    })
     return reply.send(toZone(updated))
   })
 

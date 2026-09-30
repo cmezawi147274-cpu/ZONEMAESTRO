@@ -113,6 +113,38 @@ export function toMusicServer(s: DbMusicServer, zoneCount: number, pendingSyncJo
   }
 }
 
+/** Per-zone crossfade as PUT /zones/:id/crossfade accepts it and as the API
+ * and the agent's zone-playlist sync return it. */
+export interface ZoneCrossfade {
+  enabled: boolean
+  durationMs: number
+}
+
+/** Exactly `{ enabled: boolean, durationMs }` with durationMs an integer
+ * from 1000 through 10000 in steps of 500, and nothing else. Used both to
+ * reject a bad request body and to read the stored column. */
+export function isZoneCrossfade(value: unknown): value is ZoneCrossfade {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false
+  const keys = Object.keys(value)
+  if (keys.length !== 2 || !keys.includes("enabled") || !keys.includes("durationMs")) return false
+  const { enabled, durationMs } = value as Record<string, unknown>
+  return (
+    typeof enabled === "boolean" &&
+    typeof durationMs === "number" &&
+    Number.isInteger(durationMs) &&
+    durationMs >= 1000 &&
+    durationMs <= 10000 &&
+    durationMs % 500 === 0
+  )
+}
+
+/** The stored column is plain JSON, so anything that is not exactly the
+ * shape above reads as null (unset, which means off) rather than being
+ * passed through. Never throws, so a bad row cannot fail a sync. */
+export function toZoneCrossfade(value: unknown): ZoneCrossfade | null {
+  return isZoneCrossfade(value) ? { enabled: value.enabled, durationMs: value.durationMs } : null
+}
+
 export function toZone(z: DbZone) {
   const prePrayerSnapshot =
     z.prePrayerPlaybackState != null
@@ -144,6 +176,8 @@ export function toZone(z: DbZone) {
     // shaped by src/lib/api/types.ts ZoneEqualizerSettings. Null until a
     // zone has ever had its equalizer touched.
     equalizer: (z.equalizer ?? null) as Record<string, unknown> | null,
+    // Separate column from equalizer; null when unset or not a valid shape.
+    crossfade: toZoneCrossfade(z.crossfade),
   }
 }
 

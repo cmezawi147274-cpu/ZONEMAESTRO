@@ -332,6 +332,7 @@ export const zones: Zone[] = servers.flatMap((server, idx) => {
       lastOverrideAt: null,
       excludedTrackIds: [],
       equalizer: null,
+      crossfade: null,
     }
   })
 })

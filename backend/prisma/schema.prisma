@@ -403,6 +403,11 @@ model Zone {
   // route. Null means "never configured" (flat, off); the frontend
   // supplies its own default rather than this column carrying one.
   equalizer Json?
+  // Per-zone crossfade: { enabled, durationMs } or null (unset, which is
+  // off). Written only by PUT /zones/:id/crossfade and handed to the venue
+  // on POST /server/zone-playlists/sync. Kept apart from `equalizer` so a
+  // SET_EQ ack can never overwrite it.
+  crossfade Json?
 
   schedules Schedule[]
   commands  RemoteCommand[]

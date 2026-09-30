@@ -182,6 +182,11 @@ export interface Zone {
    * zone's own Music Server (src/lib/api/zones.ts `setEqualizer`), never
    * written directly by a route. */
   equalizer: ZoneEqualizerSettings | null
+  /** Per-zone crossfade, stored in the cloud and handed to the venue on the
+   * zone-playlist sync (src/lib/api/zones.ts `setZoneCrossfade`). Null means
+   * never set, which is off. Only a venue running Music Server 1.0.14 acts
+   * on it; older builds change tracks as before. */
+  crossfade: { enabled: boolean; durationMs: number } | null
 }
 
 /** One of the three fixed-purpose EQ modules (Bass Boost, Loudness,
