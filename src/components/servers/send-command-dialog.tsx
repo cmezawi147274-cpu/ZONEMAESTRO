@@ -18,6 +18,13 @@ import { useZones } from "@/hooks/use-zones"
 import { useSendCommand } from "@/hooks/use-commands"
 import { COMMAND_TYPES, type CommandType } from "@/lib/constants"
 
+// Not offered here: the venue refuses REBOOT_SERVER, FORGET_SERVER needs the
+// server page's Forget flow, and SET_EQ / SET_VOLUME need values this dialog
+// has no fields for (the zone card sends those).
+const DIALOG_COMMAND_TYPES = COMMAND_TYPES.filter(
+  (t) => !["REBOOT_SERVER", "FORGET_SERVER", "SET_EQ", "SET_VOLUME"].includes(t)
+)
+
 export function SendCommandDialog() {
   const [open, setOpen] = useState(false)
   const [serverId, setServerId] = useState("")
@@ -75,13 +82,13 @@ export function SendCommandDialog() {
           <Select
             value={type}
             onValueChange={(v) => v && setType(v as CommandType)}
-            items={Object.fromEntries(COMMAND_TYPES.map((t) => [t, t.replaceAll("_", " ")]))}
+            items={Object.fromEntries(DIALOG_COMMAND_TYPES.map((t) => [t, t.replaceAll("_", " ")]))}
           >
             <SelectTrigger className="w-full">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {COMMAND_TYPES.map((t) => (
+              {DIALOG_COMMAND_TYPES.map((t) => (
                 <SelectItem key={t} value={t}>
                   {t.replaceAll("_", " ")}
                 </SelectItem>
