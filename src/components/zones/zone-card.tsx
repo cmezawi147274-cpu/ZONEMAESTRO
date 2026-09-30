@@ -489,9 +489,6 @@ function ZoneCrossfadeRow({ zone }: { zone: Zone }) {
         />
         <span className="w-10 text-right tabular-nums text-muted-foreground">{(shownMs / 1000).toFixed(1)} s</span>
       </div>
-      <p className="text-muted-foreground">
-        Needs Music Server 1.0.14 on the venue PC. With older versions tracks change as before. Recommended overlap: 3–5 s.
-      </p>
     </div>
   )
 }
