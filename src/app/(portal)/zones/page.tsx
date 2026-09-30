@@ -149,6 +149,7 @@ export default function ZonesPage() {
               zone={zone}
               showLocation={[locationLabel(zone.locationId), serverLabel(zone.serverId)].filter(Boolean).join(" · ")}
               todayPrayerTimes={prayerTimesByLocationId.get(zone.locationId)}
+              serverStatus={servers?.find((s) => s.id === zone.serverId)?.status}
             />
           ))}
         </div>

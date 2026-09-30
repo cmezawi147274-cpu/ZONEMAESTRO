@@ -295,7 +295,7 @@ export default function ServerDetailPage(props: PageProps<"/servers/[id]">) {
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {zones.map((zone) => (
-                <ZoneCard key={zone.id} zone={zone} />
+                <ZoneCard key={zone.id} zone={zone} serverStatus={server.status} />
               ))}
             </div>
           )}

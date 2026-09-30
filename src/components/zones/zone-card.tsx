@@ -32,7 +32,7 @@ import { ZoneVolumeRow } from "@/components/zones/zone-volume-row"
 import { ZoneEqualizerDialog, equalizerSummary } from "@/components/zones/zone-equalizer-dialog"
 import { formatRelativeTime } from "@/lib/format"
 import { PRAYER_LABELS, PRAYER_NAMES } from "@/lib/constants"
-import type { PrayerTimesToday, Zone } from "@/lib/api/types"
+import type { MusicServer, PrayerTimesToday, Zone } from "@/lib/api/types"
 
 /** Today's prayer times for the zone's own Location, computed by the
  * caller (see src/app/(portal)/zones/page.tsx) — one fetch per unique
@@ -52,10 +52,16 @@ export function ZoneCard({
   zone,
   showLocation,
   todayPrayerTimes,
+  serverStatus,
 }: {
   zone: Zone
   showLocation?: string
   todayPrayerTimes?: ZonePrayerTimesInfo
+  /** The zone's own server status, when the caller has it. The offline
+   * sweep flips only the server, so its zones keep their last reported
+   * state (often PLAYING). Omitted, e.g. for a Viewer without server:read,
+   * the card falls back to the zone's own state alone. */
+  serverStatus?: MusicServer["status"]
 }) {
   const { can } = useAuth()
   const canAssign = can("zone:assign")
@@ -90,7 +96,7 @@ export function ZoneCard({
 
   const playlist = playlists?.find((p) => p.id === zone.currentPlaylistId)
   const track = tracks?.find((t) => t.id === zone.currentTrackId)
-  const offline = zone.playbackState === "OFFLINE"
+  const offline = zone.playbackState === "OFFLINE" || serverStatus === "OFFLINE" || serverStatus === "UNKNOWN"
   const playlistName = (id: string) => playlists?.find((p) => p.id === id)?.name ?? "Playlist"
   const sortedSchedules = [...(schedules ?? [])].sort((a, b) => a.startTime.localeCompare(b.startTime))
 
