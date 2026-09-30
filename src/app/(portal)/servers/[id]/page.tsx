@@ -196,12 +196,19 @@ export default function ServerDetailPage(props: PageProps<"/servers/[id]">) {
             <HardDrive className="size-5 text-muted-foreground" />
             <div>
               <p className="text-xs text-muted-foreground">Disk</p>
-              <p className="text-lg font-semibold tabular-nums">
-                {server.usage.diskPercent}%{" "}
-                <span className="text-xs font-normal text-muted-foreground">
-                  ({server.usage.diskFreeGb}GB free)
-                </span>
-              </p>
+              {/* No agent build reports disk usage yet and the heartbeat keeps
+                  the last value (0), so a 0 GB total means "never reported",
+                  not an empty disk. */}
+              {server.usage.diskTotalGb > 0 ? (
+                <p className="text-lg font-semibold tabular-nums">
+                  {server.usage.diskPercent}%{" "}
+                  <span className="text-xs font-normal text-muted-foreground">
+                    ({server.usage.diskFreeGb}GB free)
+                  </span>
+                </p>
+              ) : (
+                <p className="text-sm text-muted-foreground">Not reported</p>
+              )}
             </div>
           </CardContent>
         </Card>
