@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger } from "@/components/ui/dialog"
+import { RoleGate } from "@/components/common/role-gate"
 import { EqualizerCurve } from "@/components/zones/equalizer-curve"
 import { EqualizerModule } from "@/components/zones/equalizer-module"
 import { EQ_PRESETS, CUSTOM_PRESET_ID, findPreset, defaultEqualizer, clampDb, clampAmount } from "@/lib/equalizer/presets"
@@ -271,7 +272,8 @@ export function ZoneEqualizerDialog({
             </Select>
 
             {nameDraft === null ? (
-              <>
+              // Same permission the preset API checks (routes/equalizer-presets.ts).
+              <RoleGate permission="zone:assign">
                 <Button
                   type="button"
                   size="sm"
@@ -296,7 +298,7 @@ export function ZoneEqualizerDialog({
                     <Trash2 className="size-3.5" />
                   </Button>
                 )}
-              </>
+              </RoleGate>
             ) : (
               <div className="flex items-center gap-1.5">
                 <Input
