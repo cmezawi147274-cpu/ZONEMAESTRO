@@ -69,7 +69,7 @@ export function ZonePlaylistDialog({ zone, trigger }: { zone: Zone; trigger: Rea
                       <p className="truncate text-xs text-muted-foreground">{track.artist}</p>
                     </div>
                     <span className="shrink-0 text-xs text-muted-foreground">{formatDuration(track.durationSec)}</span>
-                    <RoleGate permission="zone:control">
+                    <RoleGate permission="zone:assign">
                       <Button
                         variant="ghost"
                         size="icon-xs"
@@ -102,7 +102,7 @@ export function ZonePlaylistDialog({ zone, trigger }: { zone: Zone; trigger: Rea
                           <p className="truncate font-medium line-through">{track.title}</p>
                           <p className="truncate text-xs text-muted-foreground">{track.artist}</p>
                         </div>
-                        <RoleGate permission="zone:control">
+                        <RoleGate permission="zone:assign">
                           <Button
                             variant="ghost"
                             size="icon-xs"
