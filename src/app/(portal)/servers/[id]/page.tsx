@@ -24,11 +24,10 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { ServerQuickActions } from "@/components/servers/server-quick-actions"
-import { LogViewer } from "@/components/servers/log-viewer"
 import { CommandHistory } from "@/components/servers/command-history"
 import { ServerSyncTable } from "@/components/servers/server-sync-table"
 import { ZoneCard } from "@/components/zones/zone-card"
-import { useServer, useServerLogs, useDeleteServer, useForgetServer } from "@/hooks/use-servers"
+import { useServer, useDeleteServer, useForgetServer } from "@/hooks/use-servers"
 import { useZones } from "@/hooks/use-zones"
 import { useLocation } from "@/hooks/use-locations"
 import { useCommands } from "@/hooks/use-commands"
@@ -44,7 +43,6 @@ export default function ServerDetailPage(props: PageProps<"/servers/[id]">) {
   const { data: server, isLoading } = useServer(id)
   const { data: location } = useLocation(server?.locationId)
   const { data: zones } = useZones({ serverId: id })
-  const { data: logs, isLoading: logsLoading } = useServerLogs(id)
   const { data: commands, isLoading: commandsLoading } = useCommands({ serverId: id })
   const { data: syncStates, isLoading: syncLoading } = useSyncStates({ serverId: id })
   const { data: schedules } = useSchedules({ serverId: id })
@@ -340,7 +338,13 @@ export default function ServerDetailPage(props: PageProps<"/servers/[id]">) {
         </TabsContent>
 
         <TabsContent value="logs" className="pt-4">
-          <LogViewer logs={logs} isLoading={logsLoading} />
+          <Card>
+            <CardContent>
+              {/* Nothing writes LogEntry and no agent uploads its logs, so
+                  there is no data source to list here yet. */}
+              <p className="text-sm text-muted-foreground">Server logs are not available.</p>
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
     </div>
