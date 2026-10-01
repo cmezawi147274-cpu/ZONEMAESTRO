@@ -41,8 +41,8 @@ const ALLOWED_EXT_LIST = Array.from(ALLOWED_AUDIO.keys()).join(", ")
 /** Page size when the caller doesn't ask for one. Every list route here was
  * previously unbounded — a growing library meant an ever-larger response and
  * an ever-longer query, with no ceiling. */
-const DEFAULT_LIMIT = 100
-const MAX_LIMIT = 500
+const DEFAULT_LIMIT = 10000
+const MAX_LIMIT = 10000
 
 function pageSize(raw: string | undefined): number {
   const n = Number(raw ?? DEFAULT_LIMIT)
