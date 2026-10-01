@@ -408,6 +408,10 @@ model Zone {
   // on POST /server/zone-playlists/sync. Kept apart from `equalizer` so a
   // SET_EQ ack can never overwrite it.
   crossfade Json?
+  // Ready-to-show name of the zone's audio output, as the venue agent reports
+  // it on POST /server/zones/sync. Chosen on the venue PC; display only. Null
+  // until an agent new enough to send it has synced.
+  outputDeviceName String?
 
   schedules Schedule[]
   commands  RemoteCommand[]

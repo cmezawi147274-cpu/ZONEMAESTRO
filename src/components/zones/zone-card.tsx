@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { Play, Pause, Square, SkipBack, SkipForward, Moon, ListMusic, CalendarClock, SlidersHorizontal, Trash2, Blend } from "lucide-react"
+import { Play, Pause, Square, SkipBack, SkipForward, Moon, ListMusic, CalendarClock, SlidersHorizontal, Trash2, Blend, Speaker } from "lucide-react"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -104,10 +104,20 @@ export function ZoneCard({
   return (
     <Card>
       <CardHeader className="flex items-start justify-between gap-2">
-        <div>
+        {/* min-w-0 lets the output line below ellipsize instead of widening the header. */}
+        <div className="min-w-0">
           <div className="flex items-center gap-1.5">
             <p className="font-medium">{zone.name}</p>
           </div>
+          {/* Output device, chosen on the venue PC and reported by its agent;
+              display only. */}
+          <p
+            className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground"
+            title={zone.outputDeviceName || "Output not reported yet"}
+          >
+            <Speaker className="size-3 shrink-0" />
+            <span className="truncate">{zone.outputDeviceName || "Output not reported yet"}</span>
+          </p>
           {showLocation && <p className="text-xs text-muted-foreground">{showLocation}</p>}
         </div>
         <div className="flex shrink-0 items-center gap-1">

@@ -187,6 +187,11 @@ export interface Zone {
    * never set, which is off. Only a venue running Music Server 1.0.14 acts
    * on it; older builds change tracks as before. */
   crossfade: { enabled: boolean; durationMs: number } | null
+  /** The zone's audio output as the venue agent reports it, ready to show
+   * (e.g. "Headphones (JLab JBuds Lux ANC)"). Chosen on the venue PC; the
+   * portal only displays it. Null until an agent new enough to send it has
+   * synced. */
+  outputDeviceName?: string | null
 }
 
 /** One of the three fixed-purpose EQ modules (Bass Boost, Loudness,

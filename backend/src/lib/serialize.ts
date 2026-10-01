@@ -178,6 +178,8 @@ export function toZone(z: DbZone) {
     equalizer: (z.equalizer ?? null) as Record<string, unknown> | null,
     // Separate column from equalizer; null when unset or not a valid shape.
     crossfade: toZoneCrossfade(z.crossfade),
+    // As reported by the venue agent on zones/sync; null until one has.
+    outputDeviceName: z.outputDeviceName ?? null,
   }
 }
 

@@ -614,6 +614,11 @@ export default async function agentRoutes(app: FastifyInstance) {
       const volume = num(z, "volume")
       const mutedVal = field(z, "muted")
       const muted = typeof mutedVal === "boolean" ? mutedVal : undefined
+      // Optional, from newer agents: the zone's output device as a
+      // ready-to-show name (chosen on the venue PC; display only). Missing or
+      // not a string leaves the stored value as it is. Capped by code point.
+      const deviceVal = field(z, "outputDeviceName")
+      const outputDeviceName = typeof deviceVal === "string" ? Array.from(deviceVal.trim()).slice(0, 200).join("") : undefined
 
       const existing = await prisma.zone.findUnique({ where: { serverId_localZoneId: { serverId: ctx.serverId, localZoneId } } })
       // A routine heartbeat must not undo a volume a command just set —
@@ -624,7 +629,7 @@ export default async function agentRoutes(app: FastifyInstance) {
       const zone = existing
         ? await prisma.zone.update({
             where: { id: existing.id },
-            data: { name, ...(playbackState ? { playbackState } : {}), ...(applyVolume ? { volume } : {}), ...(muted !== undefined ? { muted } : {}) },
+            data: { name, ...(playbackState ? { playbackState } : {}), ...(applyVolume ? { volume } : {}), ...(muted !== undefined ? { muted } : {}), ...(outputDeviceName !== undefined ? { outputDeviceName } : {}) },
           })
         : await prisma.zone.create({
             data: {
@@ -635,6 +640,7 @@ export default async function agentRoutes(app: FastifyInstance) {
               playbackState: playbackState ?? "OFFLINE",
               volume: volume ?? 50,
               muted: muted ?? false,
+              ...(outputDeviceName !== undefined ? { outputDeviceName } : {}),
             },
           })
       mapping.push({ localZoneId, zoneId: zone.id })
