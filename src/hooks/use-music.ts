@@ -15,7 +15,7 @@ import { toast } from "sonner"
  * correct at any library size, where this still has the backend's ceiling.
  */
 export function useTracks(filters?: TrackFilters, options?: { enabled?: boolean }) {
-  const effective: TrackFilters = filters?.search || filters?.genre ? filters : { ...filters, limit: "500" }
+  const effective: TrackFilters = { ...filters, limit: "10000" }
   return useQuery({
     queryKey: ["music", effective],
     queryFn: () => musicApi.list(effective),
@@ -28,7 +28,7 @@ export function useTracksByIds(ids: string[] | undefined, options?: { enabled?: 
   const key = (ids ?? []).join(",")
   return useQuery({
     queryKey: ["music", "by-ids", key],
-    queryFn: () => musicApi.list({ ids: key }),
+    queryFn: () => musicApi.list({ ids: key, limit: "10000" }),
     enabled: (options?.enabled ?? true) && key.length > 0,
   })
 }

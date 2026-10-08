@@ -15,20 +15,19 @@ import {
 } from "@/components/ui/dialog"
 import { EmptyState } from "@/components/common/empty-state"
 import { RoleGate } from "@/components/common/role-gate"
-import { usePlaylists } from "@/hooks/use-playlists"
 import { useTracks } from "@/hooks/use-music"
+import { useAuth } from "@/hooks/use-auth"
 import { useRemoveTrackFromZone, useRestoreTrackForZone } from "@/hooks/use-zones"
 import { formatDuration } from "@/lib/format"
-import type { Zone } from "@/lib/api/types"
+import type { Playlist, Zone } from "@/lib/api/types"
 
-export function ZonePlaylistDialog({ zone, trigger }: { zone: Zone; trigger: React.ReactElement }) {
+export function ZonePlaylistDialog({ zone, playlist, trigger }: { zone: Zone; playlist?: Playlist; trigger: React.ReactElement }) {
   const [open, setOpen] = useState(false)
-  const { data: playlists } = usePlaylists()
-  const { data: tracks } = useTracks()
+  const { can } = useAuth()
   const removeTrack = useRemoveTrackFromZone()
   const restoreTrack = useRestoreTrackForZone()
 
-  const playlist = playlists?.find((p) => p.id === zone.currentPlaylistId)
+  const { data: tracks } = useTracks({ ids: (playlist?.trackIds ?? []).join(",") }, { enabled: open && can("music:read") && Boolean(playlist?.trackIds.length) })
   const included = (playlist?.trackIds ?? []).filter((id) => !zone.excludedTrackIds.includes(id))
   const excluded = zone.excludedTrackIds.filter((id) => playlist?.trackIds.includes(id))
   const trackById = (id: string) => tracks?.find((t) => t.id === id)
@@ -36,7 +35,7 @@ export function ZonePlaylistDialog({ zone, trigger }: { zone: Zone; trigger: Rea
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger render={trigger} />
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md overflow-hidden">
         <DialogHeader>
           <DialogTitle>{zone.name} — Playlist</DialogTitle>
           <DialogDescription>
@@ -56,7 +55,7 @@ export function ZonePlaylistDialog({ zone, trigger }: { zone: Zone; trigger: Rea
         ) : included.length === 0 && excluded.length === 0 ? (
           <EmptyState icon={ListMusic} title="This playlist has no tracks" className="border-none py-8" />
         ) : (
-          <ScrollArea className="h-80 pr-2">
+          <ScrollArea className="h-80 min-w-0 max-w-full pr-2">
             <div className="space-y-1">
               {included.map((trackId) => {
                 const track = trackById(trackId)
@@ -65,7 +64,7 @@ export function ZonePlaylistDialog({ zone, trigger }: { zone: Zone; trigger: Rea
                   <div key={trackId} className="flex items-center gap-2 rounded-md p-1.5 text-sm hover:bg-muted/40">
                     <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: track.coverColor }} />
                     <div className="min-w-0 flex-1">
-                      <p className="truncate font-medium">{track.title}</p>
+                      <p className="truncate font-medium" title={track.title}>{track.title}</p>
                       <p className="truncate text-xs text-muted-foreground">{track.artist}</p>
                     </div>
                     <span className="shrink-0 text-xs text-muted-foreground">{formatDuration(track.durationSec)}</span>
@@ -99,7 +98,7 @@ export function ZonePlaylistDialog({ zone, trigger }: { zone: Zone; trigger: Rea
                       <div key={trackId} className="flex items-center gap-2 rounded-md p-1.5 text-sm opacity-60">
                         <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: track.coverColor }} />
                         <div className="min-w-0 flex-1">
-                          <p className="truncate font-medium line-through">{track.title}</p>
+                          <p className="truncate font-medium line-through" title={track.title}>{track.title}</p>
                           <p className="truncate text-xs text-muted-foreground">{track.artist}</p>
                         </div>
                         <RoleGate permission="zone:assign">

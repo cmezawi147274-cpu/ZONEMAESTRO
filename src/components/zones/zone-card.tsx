@@ -1,7 +1,7 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { Play, Pause, Square, SkipBack, SkipForward, Moon, ListMusic, CalendarClock, SlidersHorizontal, Trash2, Blend, Speaker } from "lucide-react"
+import { useEffect, useRef, useState } from "react"
+import { Play, Pause, Square, SkipBack, SkipForward, Moon, ListMusic, ListX, CalendarClock, SlidersHorizontal, Trash2, Blend, Speaker } from "lucide-react"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -23,10 +23,10 @@ import { ZoneStateBadge } from "@/components/common/status-badge"
 import { RoleGate } from "@/components/common/role-gate"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useAuth } from "@/hooks/use-auth"
-import { useZoneControls, useAssignZonePlaylist, useZonePlaylists, useDeleteZone, useSetZoneCrossfade } from "@/hooks/use-zones"
+import { useZoneControls, useAssignZonePlaylist, useUnassignZonePlaylist, useZonePlaylists, useDeleteZone, useSetZoneCrossfade } from "@/hooks/use-zones"
 import { useSetZonePrayerParticipation } from "@/hooks/use-prayer"
 import { useSchedules } from "@/hooks/use-schedules"
-import { useTracks } from "@/hooks/use-music"
+import { useTracksByIds } from "@/hooks/use-music"
 import { ZonePlaylistDialog } from "@/components/zones/zone-playlist-dialog"
 import { ZoneScheduleDialog } from "@/components/zones/zone-schedule-dialog"
 import { ZoneVolumeRow } from "@/components/zones/zone-volume-row"
@@ -70,6 +70,7 @@ export function ZoneCard({
   const canReadSchedule = can("schedule:read")
   const controls = useZoneControls(zone.id, zone.serverId)
   const assignPlaylist = useAssignZonePlaylist()
+  const unassignPlaylist = useUnassignZonePlaylist()
   const deleteZone = useDeleteZone()
   const setPrayerParticipation = useSetZonePrayerParticipation()
   // Scoped to what's actually assigned to this zone (Task 2) — never the
@@ -77,26 +78,59 @@ export function ZoneCard({
   // zone:read only (which every role that can see this card already has),
   // not zone:assign — a playback-only Viewer still needs playlist names to
   // read the schedule block below.
-  const { data: playlists } = useZonePlaylists(zone.id)
+  const { data: playlists } = useZonePlaylists(zone.id, { reportedPlaylistId: zone.reportedPlaylistId })
   // A playback-only role holds neither playlist:read nor music:read; don't
   // fire queries whose 403 it can do nothing about.
-  const { data: tracks } = useTracks(undefined, { enabled: canReadMusic })
+  const { data: tracks } = useTracksByIds(zone.currentTrackId ? [zone.currentTrackId] : undefined, { enabled: canReadMusic })
   // A playback-only Viewer holds no schedule:read either — same guard as
   // playlists/tracks above, and the block below stays behind the same
   // RoleGate so it's not offered without the data to back it.
   const { data: schedules } = useSchedules({ zoneId: zone.id }, { enabled: canReadSchedule })
   const [localVolume, setLocalVolume] = useState(zone.volume)
   const [draggingVolume, setDraggingVolume] = useState(false)
+  const [heldVolume, setHeldVolume] = useState<{ target: number; before: number } | null>(null)
 
   // Follow the applied volume (e.g. a refetch, another user's change, or a
   // Prayer Mode/Super Admin effect) — but never while the user has the
   // slider mid-drag, or their in-progress gesture would jump under them.
   useEffect(() => {
-    if (!draggingVolume) setLocalVolume(zone.volume)
-  }, [zone.volume, draggingVolume])
+    if (draggingVolume) return
+    if (heldVolume) {
+      if (zone.volume === heldVolume.before && Math.abs(zone.volume - heldVolume.target) > 1) return
+      setHeldVolume(null)
+    }
+    setLocalVolume(zone.volume)
+  }, [zone.volume, draggingVolume, heldVolume])
 
-  const playlist = playlists?.find((p) => p.id === zone.currentPlaylistId)
-  const track = tracks?.find((t) => t.id === zone.currentTrackId)
+  const [assignedAfterReport, setAssignedAfterReport] = useState(false)
+  const [assignTrackId, setAssignTrackId] = useState<string | null>(null)
+  const [assignUpdatedAt, setAssignUpdatedAt] = useState<string | null>(null)
+  const seenPlaylistIds = useRef({ current: zone.currentPlaylistId, reported: zone.reportedPlaylistId })
+  useEffect(() => {
+    const prev = seenPlaylistIds.current
+    if (zone.reportedPlaylistId !== prev.reported) setAssignedAfterReport(false)
+    else if (zone.currentPlaylistId !== prev.current) {
+      setAssignTrackId(zone.currentTrackId)
+      setAssignUpdatedAt(zone.updatedAt)
+      setAssignedAfterReport(true)
+    }
+    seenPlaylistIds.current = { current: zone.currentPlaylistId, reported: zone.reportedPlaylistId }
+  }, [zone.currentPlaylistId, zone.reportedPlaylistId, zone.currentTrackId, zone.updatedAt])
+
+  const shownPlaylistId = zone.reportedPlaylistId && !assignedAfterReport ? zone.reportedPlaylistId : zone.currentPlaylistId
+  const playlist = playlists?.find((p) => p.id === shownPlaylistId)
+  const titleAllowed =
+    !assignedAfterReport ||
+    (!!zone.currentTrackId &&
+      (zone.currentTrackId !== assignTrackId || zone.updatedAt !== assignUpdatedAt) &&
+      !!playlist?.trackIds.includes(zone.currentTrackId))
+  const track = titleAllowed ? tracks?.find((t) => t.id === zone.currentTrackId) : undefined
+  const nowPlaying = track
+    ? { title: track.title, artist: track.artist }
+    : !canReadMusic && titleAllowed && zone.nowPlayingTitle
+      ? { title: zone.nowPlayingTitle, artist: zone.nowPlayingArtist ?? "" }
+      : undefined
+  const shownPlaylistName = playlist?.name ?? (canReadMusic ? undefined : (zone.nowPlayingPlaylistName ?? undefined))
   const offline = zone.playbackState === "OFFLINE" || serverStatus === "OFFLINE" || serverStatus === "UNKNOWN"
   const playlistName = (id: string) => playlists?.find((p) => p.id === id)?.name ?? "Playlist"
   const sortedSchedules = [...(schedules ?? [])].sort((a, b) => a.startTime.localeCompare(b.startTime))
@@ -179,18 +213,19 @@ export function ZoneCard({
 
         <div className="flex items-start justify-between gap-2">
           <div className="min-h-10 min-w-0">
-            {track ? (
+            {nowPlaying ? (
               <>
-                <p className="truncate text-sm font-medium">{track.title}</p>
+                <p className="truncate text-sm font-medium">{nowPlaying.title}</p>
                 <p className="truncate text-xs text-muted-foreground">
-                  {track.artist} · {playlist?.name}
+                  {nowPlaying.artist}
+                  {shownPlaylistName ? ` · ${shownPlaylistName}` : ""}
                 </p>
               </>
-            ) : zone.currentTrackId || zone.currentPlaylistId ? (
+            ) : zone.currentTrackId || zone.currentPlaylistId || shownPlaylistName ? (
               // Keyed on the assignment itself (currentPlaylistId, which both
               // assign routes save) as well as the current track, which can be
               // empty while a playlist is assigned.
-              <p className="text-sm text-muted-foreground">Playing from the assigned playlist</p>
+              <p className="text-sm text-muted-foreground">{shownPlaylistName ? `Playing from ${shownPlaylistName}` : "Playing from the assigned playlist"}</p>
             ) : (
               <p className="text-sm text-muted-foreground">No playlist assigned</p>
             )}
@@ -198,6 +233,7 @@ export function ZoneCard({
           {playlist && (
             <ZonePlaylistDialog
               zone={zone}
+              playlist={playlist}
               trigger={
                 <Button variant="ghost" size="icon-sm" className="shrink-0" title="View this zone's playlist">
                   <ListMusic className="size-4" />
@@ -285,9 +321,13 @@ export function ZoneCard({
               // *old* value — the round-trip to the agent and back is not
               // instant — so the slider visibly snapped back to the old
               // value and then jumped to the new one a moment later.
+              setHeldVolume({ target: next, before: zone.volume })
               controls
                 .setVolume(next)
-                .catch(() => setLocalVolume(zone.volume))
+                .catch(() => {
+                  setHeldVolume(null)
+                  setLocalVolume(zone.volume)
+                })
                 .finally(() => setDraggingVolume(false))
             }}
           />
@@ -308,9 +348,13 @@ export function ZoneCard({
                   setLocalVolume(next)
                 }}
                 onValueCommitted={(next) => {
+                  setHeldVolume({ target: next, before: zone.volume })
                   controls
                     .setVolume(next)
-                    .catch(() => setLocalVolume(zone.volume))
+                    .catch(() => {
+                      setHeldVolume(null)
+                      setLocalVolume(zone.volume)
+                    })
                     .finally(() => setDraggingVolume(false))
                 }}
               />
@@ -359,23 +403,38 @@ export function ZoneCard({
           {/* "No playlist assigned" only once the list has loaded, and never
               while the zone itself carries an assignment (currentPlaylistId). */}
           {playlists && playlists.length > 0 ? (
-            <Select
-              value={zone.currentPlaylistId ?? undefined}
-              onValueChange={(playlistId) => playlistId && assignPlaylist.mutate({ zoneId: zone.id, playlistId })}
-              items={Object.fromEntries(playlists.map((p) => [p.id, p.name]))}
-              disabled={offline}
-            >
-              <SelectTrigger className="w-full" size="sm">
-                <SelectValue placeholder="Assign playlist" />
-              </SelectTrigger>
-              <SelectContent>
-                {playlists.map((p) => (
-                  <SelectItem key={p.id} value={p.id}>
-                    {p.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <div className="flex items-center gap-1">
+              <Select
+                value={zone.currentPlaylistId ?? null}
+                onValueChange={(playlistId) => playlistId && assignPlaylist.mutate({ zoneId: zone.id, playlistId })}
+                items={Object.fromEntries(playlists.map((p) => [p.id, p.name]))}
+                disabled={offline}
+              >
+                <SelectTrigger className="w-full min-w-0 flex-1" size="sm">
+                  <SelectValue placeholder="Assign playlist" />
+                </SelectTrigger>
+                <SelectContent>
+                  {playlists.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {zone.currentPlaylistId && (
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className="shrink-0"
+                  title="Remove playlist from this zone"
+                  aria-label="Remove playlist from this zone"
+                  disabled={offline || unassignPlaylist.isPending}
+                  onClick={() => unassignPlaylist.mutate({ zoneId: zone.id, playlistId: zone.currentPlaylistId! })}
+                >
+                  <ListX className="size-4" />
+                </Button>
+              )}
+            </div>
           ) : zone.currentPlaylistId || !playlists ? null : (
             <p className="rounded-md border px-2.5 py-1.5 text-center text-xs text-muted-foreground">
               No playlist assigned

@@ -36,7 +36,7 @@ export function ZoneScheduleDialog({ zone, trigger }: { zone: Zone; trigger: Rea
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger render={trigger} />
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md overflow-hidden">
         <DialogHeader>
           <DialogTitle>{zone.name} — Schedule</DialogTitle>
           <DialogDescription>
@@ -48,7 +48,7 @@ export function ZoneScheduleDialog({ zone, trigger }: { zone: Zone; trigger: Rea
         {sorted.length === 0 ? (
           <EmptyState icon={CalendarClock} title="No time slots yet" className="border-none py-8" />
         ) : (
-          <div className="space-y-1.5">
+          <div className="min-w-0 space-y-1.5">
             {sorted.map((s) => (
               <div key={s.id} className="flex items-center justify-between gap-2 rounded-md border px-2.5 py-2 text-sm">
                 <div className="min-w-0">

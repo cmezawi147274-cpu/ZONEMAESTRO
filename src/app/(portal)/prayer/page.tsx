@@ -3,7 +3,6 @@
 import { PageHeader } from "@/components/common/page-header"
 import { EmptyState } from "@/components/common/empty-state"
 import { PrayerModeForm } from "@/components/prayer/prayer-mode-form"
-import { ZoneParticipationList } from "@/components/prayer/zone-participation-list"
 import { useAuth } from "@/hooks/use-auth"
 import { Moon } from "lucide-react"
 
@@ -23,9 +22,6 @@ export default function PrayerModePage() {
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">
           <PrayerModeForm />
-        </div>
-        <div>
-          <ZoneParticipationList />
         </div>
       </div>
     </div>

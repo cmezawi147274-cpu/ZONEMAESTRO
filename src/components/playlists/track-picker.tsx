@@ -95,7 +95,7 @@ export function TrackPicker({
   }
 
   return (
-    <div className="space-y-2">
+    <div className="min-w-0 space-y-2">
       <div className="relative">
         <Search className="absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input placeholder="Search tracks…" value={search} onChange={(e) => setSearch(e.target.value)} className="pl-8" />
@@ -108,7 +108,7 @@ export function TrackPicker({
         </label>
       )}
 
-      <ScrollArea className={cn("rounded-lg border", compact ? "h-48" : "h-72")}>
+      <ScrollArea className={cn("min-w-0 max-w-full rounded-lg border", compact ? "h-48" : "h-72")}>
         {groups.length === 0 ? (
           <p className="p-4 text-center text-sm text-muted-foreground">No matching tracks</p>
         ) : (
@@ -152,7 +152,7 @@ export function TrackPicker({
                       <label key={track.id} className="flex items-center gap-3 p-2.5 text-sm hover:bg-muted/40">
                         <Checkbox checked={selected.includes(track.id)} onCheckedChange={() => toggleOne(track.id)} />
                         <div className="min-w-0 flex-1">
-                          <p className="truncate font-medium">{track.title}</p>
+                          <p className="truncate font-medium" title={track.title}>{track.title}</p>
                           <p className="truncate text-xs text-muted-foreground">{track.artist}</p>
                         </div>
                       </label>

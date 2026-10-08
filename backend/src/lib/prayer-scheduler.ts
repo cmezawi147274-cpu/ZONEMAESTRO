@@ -264,8 +264,28 @@ function pruneFired(activeDateKeys: Set<string>) {
 export function startPrayerScheduler() {
   const timer = setInterval(async () => {
     try {
-      const configs = await prisma.prayerConfig.findMany({ where: { enabled: true } })
+      const configs = await prisma.prayerConfig.findMany()
       const now = new Date()
+      const unconfigured = await prisma.organization.findMany({
+        where: { id: { notIn: configs.map((c) => c.organizationId) } },
+        select: { id: true },
+      })
+      for (const { id } of unconfigured) {
+        configs.push({
+          id: `default:${id}`,
+          organizationId: id,
+          enabled: true,
+          linkedLocationId: null,
+          country: null,
+          city: null,
+          latitude: null,
+          longitude: null,
+          timezone: null,
+          calculationMethodId: 3,
+          prayers: Object.fromEntries(PRAYER_NAMES.map((name) => [name, { enabled: true, offsetMinutes: 0, pauseDurationMinutes: 10 }])),
+          updatedAt: now,
+        })
+      }
       const activeDateKeys = new Set<string>()
       for (const config of configs) {
         for (const dateKey of await tickOrganization(config, now)) activeDateKeys.add(dateKey)

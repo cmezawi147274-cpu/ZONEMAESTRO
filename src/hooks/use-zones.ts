@@ -1,6 +1,6 @@
 "use client"
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { zonesApi } from "@/lib/api/zones"
 import { useAuth } from "@/hooks/use-auth"
 import { toast } from "sonner"
@@ -36,11 +36,12 @@ export function useZone(id: string | undefined) {
  * the backend's 600/min per-IP budget and have real clicks come back 429.
  * Mutations that change which playlists a zone has invalidate this key
  * explicitly instead. */
-export function useZonePlaylists(zoneId: string, options?: { enabled?: boolean }) {
+export function useZonePlaylists(zoneId: string, options?: { enabled?: boolean; reportedPlaylistId?: string | null }) {
   return useQuery({
-    queryKey: ["zone-playlists", zoneId],
+    queryKey: ["zone-playlists", zoneId, options?.reportedPlaylistId ?? null],
     queryFn: () => zonesApi.playlists(zoneId),
     enabled: options?.enabled ?? true,
+    placeholderData: (previous, previousQuery) => (previousQuery?.queryKey[1] === zoneId ? keepPreviousData(previous) : undefined),
   })
 }
 
@@ -121,6 +122,20 @@ export function useAssignZonePlaylist() {
       // No longer covered by the ["zones"] prefix — see useZonePlaylists.
       qc.invalidateQueries({ queryKey: ["zone-playlists"] })
       toast.success("Playlist assigned to zone")
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+}
+
+export function useUnassignZonePlaylist() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ zoneId, playlistId }: { zoneId: string; playlistId: string }) =>
+      zonesApi.unassignPlaylist(zoneId, playlistId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["zones"] })
+      qc.invalidateQueries({ queryKey: ["zone-playlists"] })
+      toast.success("Playlist removed from zone")
     },
     onError: (e: Error) => toast.error(e.message),
   })

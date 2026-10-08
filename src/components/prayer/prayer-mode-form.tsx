@@ -87,11 +87,6 @@ export function PrayerModeForm() {
             <CardTitle className="text-sm font-medium">Prayer Mode</CardTitle>
             <CardDescription>Automatically pause eligible zones during prayer times.</CardDescription>
           </div>
-          <Switch
-            checked={config.enabled}
-            disabled={!canManage}
-            onCheckedChange={(enabled) => setConfig((prev) => ({ ...prev, enabled }))}
-          />
         </CardHeader>
       </Card>
 

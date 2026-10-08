@@ -412,6 +412,7 @@ model Zone {
   // it on POST /server/zones/sync. Chosen on the venue PC; display only. Null
   // until an agent new enough to send it has synced.
   outputDeviceName String?
+  reportedPlaylistId String?
 
   schedules Schedule[]
   commands  RemoteCommand[]
@@ -419,6 +420,14 @@ model Zone {
   @@index([serverId])
   @@index([locationId])
   @@unique([serverId, localZoneId])
+}
+
+model ZoneRevivalBlock {
+  serverId    String
+  localZoneId String
+  status      String
+
+  @@id([serverId, localZoneId])
 }
 
 model Track {

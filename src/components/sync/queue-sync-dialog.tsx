@@ -49,14 +49,14 @@ export function QueueSyncDialog() {
           </Button>
         }
       />
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="sm:max-w-2xl overflow-hidden">
         <DialogHeader>
           <DialogTitle>Queue Music Sync</DialogTitle>
           <DialogDescription>Select tracks and the Windows MusicServers that should download them.</DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-2">
+        <div className="grid min-w-0 gap-4 sm:grid-cols-2">
+          <div className="min-w-0 space-y-2">
             <p className="text-sm font-medium">
               Tracks <span className="text-muted-foreground">({selectedTracks.length} selected)</span>
             </p>
@@ -64,7 +64,7 @@ export function QueueSyncDialog() {
               <Search className="absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
               <Input placeholder="Search tracks…" value={search} onChange={(e) => setSearch(e.target.value)} className="h-8 pl-7 text-sm" />
             </div>
-            <ScrollArea className="h-64 rounded-lg border">
+            <ScrollArea className="h-64 min-w-0 max-w-full rounded-lg border">
               <div className="space-y-0.5 p-1.5">
                 {tracks?.map((track) => (
                   <label key={track.id} className="flex items-center gap-2 rounded-md p-1.5 text-sm hover:bg-muted/40">
@@ -74,7 +74,7 @@ export function QueueSyncDialog() {
                         setSelectedTracks((prev) => (checked ? [...prev, track.id] : prev.filter((id) => id !== track.id)))
                       }
                     />
-                    <span className="min-w-0 flex-1 truncate">{track.title}</span>
+                    <span className="min-w-0 flex-1 truncate" title={track.title}>{track.title}</span>
                     <span className="shrink-0 text-xs text-muted-foreground">{track.artist}</span>
                   </label>
                 ))}
@@ -82,11 +82,11 @@ export function QueueSyncDialog() {
             </ScrollArea>
           </div>
 
-          <div className="space-y-2">
+          <div className="min-w-0 space-y-2">
             <p className="text-sm font-medium">
               Servers <span className="text-muted-foreground">({selectedServers.length} selected)</span>
             </p>
-            <ScrollArea className="h-[calc(16rem+2.25rem)] rounded-lg border">
+            <ScrollArea className="h-[calc(16rem+2.25rem)] min-w-0 max-w-full rounded-lg border">
               <div className="space-y-0.5 p-1.5">
                 {servers?.map((server) => (
                   <label key={server.id} className="flex items-center gap-2 rounded-md p-1.5 text-sm hover:bg-muted/40">

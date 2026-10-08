@@ -69,20 +69,28 @@ export function forgetAgent(serverId: string) {
  * again exactly as before. Deliberately process-local, same as the rest
  * of this module.
  */
-const recentVolumeWrites = new Map<string, number>()
+const volumeWindows = new Map<string, { target: number; stale: Set<number> }>()
 
-export function markZoneVolumeWritten(zoneId: string) {
-  recentVolumeWrites.set(zoneId, Date.now())
+export function markZoneVolumeWritten(zoneId: string, target?: number, before?: number) {
+  if (target === undefined) return
+  const open = volumeWindows.get(zoneId)
+  const stale = new Set<number>(open ? [...open.stale, open.target] : [])
+  if (before !== undefined) stale.add(before)
+  for (const v of stale) if (Math.abs(v - target) <= 1) stale.delete(v)
+  if (stale.size === 0) volumeWindows.delete(zoneId)
+  else volumeWindows.set(zoneId, { target, stale })
 }
 
-/** Covers at least one full heartbeat interval past the write, so a
- * heartbeat request already in flight when the command executed — sampled
- * before it, arriving after — can't win the race either. */
-export function isZoneVolumeWriteFresh(zoneId: string): boolean {
-  const at = recentVolumeWrites.get(zoneId)
-  if (!at) return false
-  const graceMs = (env.agentHeartbeatIntervalSeconds + 5) * 1000
-  return Date.now() - at <= graceMs
+export function clearZoneVolumeWindow(zoneId: string) {
+  volumeWindows.delete(zoneId)
+}
+
+export function shouldIgnoreReportedVolume(zoneId: string, volume: number): boolean {
+  const open = volumeWindows.get(zoneId)
+  if (!open) return false
+  if (open.stale.has(volume)) return true
+  volumeWindows.delete(zoneId)
+  return false
 }
 
 export function registerHubSocket(serverId: string, ws: WebSocket, options?: { pushCapable?: boolean }) {

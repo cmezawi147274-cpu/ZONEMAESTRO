@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify"
-import { Prisma } from "@prisma/client"
+import { Prisma, type Zone as DbZone } from "@prisma/client"
 import { prisma } from "../lib/db.js"
 import { toZone, toPlaylist, isZoneCrossfade } from "../lib/serialize.js"
 import { requireAuth, requireUser, tenantScope, type TenantScope } from "../lib/auth-context.js"
@@ -34,6 +34,32 @@ async function scopedZone(scope: TenantScope, zoneId: string) {
   return zone
 }
 
+async function withNowPlaying(zones: DbZone[]) {
+  const trackIds = [...new Set(zones.map((z) => z.currentTrackId).filter((id): id is string => !!id))]
+  const playlistIds = [...new Set(zones.map((z) => z.reportedPlaylistId ?? z.currentPlaylistId).filter((id): id is string => !!id))]
+  if (trackIds.length === 0 && playlistIds.length === 0) return zones.map((z) => toZone(z))
+  const [tracks, playlists, servers] = await Promise.all([
+    trackIds.length ? prisma.track.findMany({ where: { id: { in: trackIds } }, select: { id: true, title: true, artist: true, organizationId: true } }) : [],
+    playlistIds.length ? prisma.playlist.findMany({ where: { id: { in: playlistIds } }, select: { id: true, name: true, organizationId: true } }) : [],
+    prisma.musicServer.findMany({ where: { id: { in: [...new Set(zones.map((z) => z.serverId))] } }, select: { id: true, organizationId: true } }),
+  ])
+  const orgOf = new Map(servers.map((s) => [s.id, s.organizationId]))
+  const trackById = new Map(tracks.map((t) => [t.id, t]))
+  const playlistById = new Map(playlists.map((p) => [p.id, p]))
+  return zones.map((z) => {
+    const visible = (owner: string | null) => owner === null || owner === orgOf.get(z.serverId)
+    const track = z.currentTrackId ? trackById.get(z.currentTrackId) : undefined
+    const playlistId = z.reportedPlaylistId ?? z.currentPlaylistId
+    const playlist = playlistId ? playlistById.get(playlistId) : undefined
+    const shownTrack = track && visible(track.organizationId) ? track : undefined
+    return toZone(z, {
+      title: shownTrack?.title ?? null,
+      artist: shownTrack?.artist ?? null,
+      playlistName: playlist && visible(playlist.organizationId) ? playlist.name : null,
+    })
+  })
+}
+
 export default async function zonesRoutes(app: FastifyInstance) {
   app.addHook("preHandler", requireAuth)
 
@@ -54,14 +80,15 @@ export default async function zonesRoutes(app: FastifyInstance) {
     if (serverId) where.serverId = serverId
     if (locationId && !scope.locationId) where.locationId = locationId
     const zones = await prisma.zone.findMany({ where, orderBy: { name: "asc" } })
-    return reply.send(zones.map(toZone))
+    return reply.send(await withNowPlaying(zones))
   })
 
   app.get<{ Params: { id: string } }>("/zones/:id", async (request, reply) => {
     const user = requireUser(request)
     if (!can(user.role, "zone:read")) throw forbidden()
     const zone = await scopedZone(tenantScope(request), request.params.id)
-    return reply.send(toZone(zone))
+    const [withNames] = await withNowPlaying([zone])
+    return reply.send(withNames)
   })
 
   // --------------------------------------------------------------------
@@ -127,6 +154,23 @@ export default async function zonesRoutes(app: FastifyInstance) {
       data: { currentPlaylistId: playlist.id, currentTrackId: firstTrack, excludedTrackIds },
     })
     await queuePlaylistTracksForServer(playlist.id, zone.serverId)
+    return reply.send(toZone(updated))
+  })
+
+  app.post<{ Params: { id: string }; Body: { playlistId: string } }>("/zones/:id/playlist/unassign", async (request, reply) => {
+    const user = requireUser(request)
+    if (!can(user.role, "zone:assign")) throw forbidden()
+    const zone = await scopedZone(tenantScope(request), request.params.id)
+    const server = await prisma.musicServer.findUnique({ where: { id: zone.serverId } })
+    if (!server || server.status === "OFFLINE" || server.status === "UNKNOWN") {
+      throw badRequest(`${server?.name ?? "Server"} is offline — playlist not removed.`)
+    }
+    const playlistId = request.body?.playlistId
+    if (!playlistId || zone.currentPlaylistId !== playlistId) {
+      throw badRequest("This zone's playlist has changed. Refresh and try again.")
+    }
+    const updated = await prisma.zone.update({ where: { id: zone.id }, data: { currentPlaylistId: null } })
+    await prisma.playlistAssignment.deleteMany({ where: { playlistId, targetType: "ZONE", targetId: zone.id } })
     return reply.send(toZone(updated))
   })
 

@@ -98,6 +98,7 @@ export function UploadMusicDialog() {
       folderId = folderChoice
     }
 
+    let failed = 0
     for (const item of items) {
       if (item.status === "done") continue
       updateItem(item.id, { status: "uploading" })
@@ -115,15 +116,15 @@ export function UploadMusicDialog() {
           (percent) => updateItem(item.id, { progress: percent })
         )
         updateItem(item.id, { status: "done", progress: 100 })
-      } catch {
+      } catch (e) {
+        failed++
         updateItem(item.id, { status: "error" })
+        toast.error(`${item.file.name}: ${e instanceof Error ? e.message : "Upload failed"}`)
       }
     }
     setUploading(false)
     queryClient.invalidateQueries({ queryKey: ["music"] })
-    const failed = items.filter((i) => i.status === "error").length
     if (failed === 0) toast.success(`Uploaded ${items.length} track(s) to the cloud library`)
-    else toast.warning(`Uploaded with ${failed} failure(s)`)
   }
 
   function reset() {

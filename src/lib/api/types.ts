@@ -192,6 +192,10 @@ export interface Zone {
    * portal only displays it. Null until an agent new enough to send it has
    * synced. */
   outputDeviceName?: string | null
+  reportedPlaylistId?: string | null
+  nowPlayingTitle?: string | null
+  nowPlayingArtist?: string | null
+  nowPlayingPlaylistName?: string | null
 }
 
 /** One of the three fixed-purpose EQ modules (Bass Boost, Loudness,

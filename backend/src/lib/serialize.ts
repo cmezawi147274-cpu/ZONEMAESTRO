@@ -145,7 +145,7 @@ export function toZoneCrossfade(value: unknown): ZoneCrossfade | null {
   return isZoneCrossfade(value) ? { enabled: value.enabled, durationMs: value.durationMs } : null
 }
 
-export function toZone(z: DbZone) {
+export function toZone(z: DbZone, nowPlaying?: { title: string | null; artist: string | null; playlistName: string | null }) {
   const prePrayerSnapshot =
     z.prePrayerPlaybackState != null
       ? {
@@ -180,6 +180,10 @@ export function toZone(z: DbZone) {
     crossfade: toZoneCrossfade(z.crossfade),
     // As reported by the venue agent on zones/sync; null until one has.
     outputDeviceName: z.outputDeviceName ?? null,
+    reportedPlaylistId: z.reportedPlaylistId ?? null,
+    nowPlayingTitle: nowPlaying?.title ?? null,
+    nowPlayingArtist: nowPlaying?.artist ?? null,
+    nowPlayingPlaylistName: nowPlaying?.playlistName ?? null,
   }
 }
 

@@ -13,6 +13,9 @@ const nextConfig: NextConfig = {
   // Produces a self-contained server bundle (node_modules pruned to only
   // what's needed at runtime) — see Dockerfile.
   output: "standalone",
+  experimental: {
+    proxyClientMaxBodySize: 200 * 1024 * 1024,
+  },
   async rewrites() {
     return [
       { source: "/api/:path*", destination: `${backend}/api/:path*` },

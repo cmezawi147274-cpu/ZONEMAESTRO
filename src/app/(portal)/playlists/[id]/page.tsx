@@ -40,9 +40,11 @@ export default function PlaylistDetailPage(props: PageProps<"/playlists/[id]">) 
 
   function move(index: number, delta: number) {
     const newIndex = index + delta
-    if (newIndex < 0 || newIndex >= playlist!.trackIds.length) return
+    if (newIndex < 0 || newIndex >= trackList.length) return
     const next = [...playlist!.trackIds]
-    ;[next[index], next[newIndex]] = [next[newIndex], next[index]]
+    const from = next.indexOf(trackList[index]!.id)
+    const to = next.indexOf(trackList[newIndex]!.id)
+    ;[next[from], next[to]] = [next[to], next[from]]
     reorder.mutate({ id: playlist!.id, trackIds: next })
   }
 

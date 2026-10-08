@@ -23,6 +23,8 @@ class RealtimeClient {
   private stateListeners = new Set<(s: ConnectionState) => void>()
   private socket: import("socket.io-client").Socket | null = null
   private unsubscribeMock: (() => void) | null = null
+  private authRetries = 0
+  private retryTimer: ReturnType<typeof setTimeout> | null = null
 
   getState() {
     return this.state
@@ -39,7 +41,8 @@ class RealtimeClient {
   }
 
   connect() {
-    if (this.state !== "disconnected") return
+    if (this.state !== "disconnected" || this.retryTimer) return
+    this.authRetries = 0
     this.setState("connecting")
 
     if (env.useMockApi) {
@@ -55,31 +58,55 @@ class RealtimeClient {
     // server rejects the handshake with UNAUTHORIZED — previously the
     // namespace accepted anyone and broadcast every tenant's events to
     // every socket.
+    this.openSocket()
+  }
+
+  private openSocket() {
     import("socket.io-client").then(({ io }) => {
       const token = readSession()?.tokens.accessToken
       if (!token) {
         this.setState("disconnected")
         return
       }
+      this.socket?.removeAllListeners()
+      this.socket?.close()
       const socket = io(env.wsUrl, {
         transports: ["websocket"],
         withCredentials: true,
         auth: { token },
       })
       this.socket = socket
-      socket.on("connect", () => this.setState("connected"))
+      socket.on("connect", () => {
+        this.authRetries = 0
+        this.setState("connected")
+      })
       socket.on("disconnect", () => this.setState("disconnected"))
       // A rejected handshake (expired/absent token) must not spin forever:
-      // stop retrying and let the API layer's 401 path drive re-login.
+      // reconnect with the current session token at 1, 2, 4, 8 and 16 s,
+      // then stop and let the API layer's 401 path drive re-login.
       socket.on("connect_error", (err: Error) => {
         this.setState("disconnected")
-        if (err.message === "UNAUTHORIZED") socket.close()
+        if (err.message !== "UNAUTHORIZED") return
+        socket.removeAllListeners()
+        socket.close()
+        if (this.socket === socket) this.socket = null
+        if (this.authRetries >= 5) return
+        const delayMs = 1000 * 2 ** this.authRetries
+        this.authRetries++
+        this.retryTimer = setTimeout(() => {
+          this.retryTimer = null
+          this.setState("connecting")
+          this.openSocket()
+        }, delayMs)
       })
       socket.on("event", (payload: RealtimeEvent) => mockBus.emit(payload))
     })
   }
 
   disconnect() {
+    if (this.retryTimer) clearTimeout(this.retryTimer)
+    this.retryTimer = null
+    this.authRetries = 0
     this.unsubscribeMock?.()
     this.socket?.disconnect()
     this.socket = null

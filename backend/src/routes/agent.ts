@@ -19,7 +19,7 @@ import { badRequest, notFound, HttpError } from "../lib/http-error.js"
 import { requireAgent, generateAgentToken, sha256Hex } from "../lib/agent-auth.js"
 import { hashPairingCode, normalizePairingCode, pairingReplayWindowMs, checkAndRecordLocationPairingAttempt } from "../lib/pairing.js"
 import { seededShuffle } from "../lib/shuffle.js"
-import { markAgentSeen, resolveAck, forgetAgent, markZoneVolumeWritten, isZoneVolumeWriteFresh } from "../lib/agent-registry.js"
+import { markAgentSeen, resolveAck, forgetAgent, markZoneVolumeWritten, clearZoneVolumeWindow, shouldIgnoreReportedVolume } from "../lib/agent-registry.js"
 import { emitEvent } from "../realtime.js"
 import { pushActivity } from "../lib/activity.js"
 import { MUSIC_SERVER_HUB_PATH } from "../agent/signalrHub.js"
@@ -427,13 +427,23 @@ export default async function agentRoutes(app: FastifyInstance) {
     })
 
     const zoneStateRaw = field(body, "zoneState")
+    if (updated.zoneId && (updated.type === "SET_VOLUME" || updated.type === "MUTE" || updated.type === "UNMUTE")) {
+      if (status === "SUCCESS") {
+        const prior = await prisma.zone.findUnique({ where: { id: updated.zoneId }, select: { volume: true } })
+        const reportedVolume = zoneStateRaw && typeof zoneStateRaw === "object" ? num(zoneStateRaw as Record<string, unknown>, "volume") : undefined
+        const payloadVolume = updated.type === "SET_VOLUME" && command.payload && typeof command.payload === "object" ? num(command.payload as Record<string, unknown>, "volume") : undefined
+        const target = reportedVolume ?? payloadVolume ?? prior?.volume
+        if (prior && target !== undefined) markZoneVolumeWritten(updated.zoneId, target, prior.volume)
+      } else if (status === "FAILED") {
+        clearZoneVolumeWindow(updated.zoneId)
+      }
+    }
     if (updated.zoneId && status === "SUCCESS" && zoneStateRaw && typeof zoneStateRaw === "object") {
       const zoneState = zoneStateRaw as Record<string, unknown>
       const data: Record<string, unknown> = {}
       const volume = num(zoneState, "volume")
       if (volume !== undefined) {
         data.volume = volume
-        markZoneVolumeWritten(updated.zoneId)
       }
       const muted = field(zoneState, "muted")
       if (typeof muted === "boolean") data.muted = muted
@@ -541,7 +551,10 @@ export default async function agentRoutes(app: FastifyInstance) {
     const ctx = await requireAgent(request)
     const body = request.body ?? {}
     const cachedTrackIdsRaw = field(body, "cachedTrackIds")
-    const cachedTrackIds = Array.isArray(cachedTrackIdsRaw) ? cachedTrackIdsRaw.filter((x): x is string => typeof x === "string") : []
+    const reportedTrackIds = Array.isArray(cachedTrackIdsRaw) ? cachedTrackIdsRaw.filter((x): x is string => typeof x === "string") : []
+    const cachedTrackIds = reportedTrackIds.length > 0
+      ? (await prisma.track.findMany({ where: { id: { in: reportedTrackIds } }, select: { id: true } })).map((t) => t.id)
+      : []
 
     if (cachedTrackIds.length > 0) {
       await Promise.all(
@@ -556,12 +569,19 @@ export default async function agentRoutes(app: FastifyInstance) {
       await pushActivity({ type: "MUSIC_SYNC_COMPLETED", message: `${cachedTrackIds.length} track(s) cached on ${ctx.server.name}.`, serverId: ctx.serverId })
     }
 
+    const handOut = {
+      serverId: ctx.serverId,
+      OR: [
+        { status: "QUEUED_FOR_SYNC" as const },
+        { status: "SYNCING" as const, updatedAt: { lt: new Date(Date.now() - 15 * 60 * 1000) } },
+      ],
+    }
     const queued = await prisma.trackSyncState.findMany({
-      where: { serverId: ctx.serverId, status: "QUEUED_FOR_SYNC" },
+      where: handOut,
       include: { track: true },
     })
     await prisma.trackSyncState.updateMany({
-      where: { serverId: ctx.serverId, status: "QUEUED_FOR_SYNC" },
+      where: { ...handOut, trackId: { in: queued.map((s) => s.trackId) } },
       data: { status: "SYNCING" },
     })
 
@@ -619,17 +639,19 @@ export default async function agentRoutes(app: FastifyInstance) {
       // not a string leaves the stored value as it is. Capped by code point.
       const deviceVal = field(z, "outputDeviceName")
       const outputDeviceName = typeof deviceVal === "string" ? Array.from(deviceVal.trim()).slice(0, 200).join("") : undefined
+      const currentTrackId = str(z, "currentTrackId")
+      const reportedPlaylistId = str(z, "reportedPlaylistId")
 
       const existing = await prisma.zone.findUnique({ where: { serverId_localZoneId: { serverId: ctx.serverId, localZoneId } } })
       // A routine heartbeat must not undo a volume a command just set —
       // see agent-registry.ts#isZoneVolumeWriteFresh for why this race
       // exists at all. Every other field this route reports is still
       // trusted unconditionally; only volume gets this grace window.
-      const applyVolume = volume !== undefined && !(existing && isZoneVolumeWriteFresh(existing.id))
+      const applyVolume = volume !== undefined && !(existing && shouldIgnoreReportedVolume(existing.id, volume))
       const zone = existing
         ? await prisma.zone.update({
             where: { id: existing.id },
-            data: { name, ...(playbackState ? { playbackState } : {}), ...(applyVolume ? { volume } : {}), ...(muted !== undefined ? { muted } : {}), ...(outputDeviceName !== undefined ? { outputDeviceName } : {}) },
+            data: { name, ...(playbackState ? { playbackState } : {}), ...(applyVolume ? { volume } : {}), ...(muted !== undefined ? { muted } : {}), ...(outputDeviceName !== undefined ? { outputDeviceName } : {}), ...(currentTrackId ? { currentTrackId } : {}), ...(reportedPlaylistId ? { reportedPlaylistId } : {}) },
           })
         : await prisma.zone.create({
             data: {
@@ -641,6 +663,7 @@ export default async function agentRoutes(app: FastifyInstance) {
               volume: volume ?? 50,
               muted: muted ?? false,
               ...(outputDeviceName !== undefined ? { outputDeviceName } : {}),
+              ...(reportedPlaylistId ? { reportedPlaylistId } : {}),
             },
           })
       mapping.push({ localZoneId, zoneId: zone.id })

@@ -75,6 +75,22 @@ export const zonesApi = {
     return apiClient.post<Zone>(`/zones/${id}/playlist`, { playlistId })
   },
 
+  async unassignPlaylist(id: string, playlistId: string): Promise<Zone> {
+    if (isMockMode) {
+      await delay(300)
+      const zone = store.zones.find((z) => z.id === id)
+      if (!zone) throw new Error("Zone not found")
+      const server = store.servers.find((s) => s.id === zone.serverId)
+      if (!server || server.status === "OFFLINE" || server.status === "UNKNOWN") {
+        throw new Error(`${server?.name ?? "Server"} is offline — playlist not removed.`)
+      }
+      if (zone.currentPlaylistId === playlistId) zone.currentPlaylistId = null
+      zone.updatedAt = new Date().toISOString()
+      return { ...zone }
+    }
+    return apiClient.post<Zone>(`/zones/${id}/playlist/unassign`, { playlistId })
+  },
+
   /** Playlists actually assigned to this zone — a PlaylistAssignment
    * (targetType ZONE) targeting it, or its own currentPlaylistId. Never
    * the whole library; see src/components/zones/zone-card.tsx, which uses
