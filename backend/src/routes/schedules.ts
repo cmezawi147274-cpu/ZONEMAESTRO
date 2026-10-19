@@ -4,7 +4,7 @@ import { toSchedule } from "../lib/serialize.js"
 import { requireAuth, requireUser, tenantScope } from "../lib/auth-context.js"
 import { can } from "../lib/rbac.js"
 import { forbidden, notFound, badRequest } from "../lib/http-error.js"
-import { scopedZone, scopedServer, scopedPlaylist, allowedLocationIds } from "../lib/tenant.js"
+import { scopedZone, scopedServer, scopedPlaylist, allowedLocationIds, assertPlaylistFitsZone } from "../lib/tenant.js"
 
 const DAYS = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"] as const
 type DayOfWeek = (typeof DAYS)[number]
@@ -122,6 +122,7 @@ export default async function schedulesRoutes(app: FastifyInstance) {
     // another organization's playlist onto another organization's zone.
     const zone = await scopedZone(scope, body.zoneId)
     const playlist = await scopedPlaylist(scope, body.playlistId)
+    await assertPlaylistFitsZone(playlist, zone.id)
 
     const schedule = await prisma.schedule.create({
       data: {
@@ -178,6 +179,7 @@ export default async function schedulesRoutes(app: FastifyInstance) {
     if (body.repeat !== undefined) data.repeat = Boolean(body.repeat)
     if (body.playlistId !== undefined) {
       const playlist = await scopedPlaylist(scope, body.playlistId)
+      if (playlist.id !== existing.playlistId) await assertPlaylistFitsZone(playlist, existing.zoneId)
       data.playlistId = playlist.id
     }
 

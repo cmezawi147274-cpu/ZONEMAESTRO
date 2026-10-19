@@ -84,6 +84,25 @@ export function useDeletePlaylist() {
   })
 }
 
+export function useSetPlaylistAccess() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, organizationId }: { id: string; organizationId: string | null }) => playlistsApi.setAccess(id, organizationId),
+    onSuccess: ({ zonesAffected, schedulesRemoved }) => {
+      qc.invalidateQueries({ queryKey: ["playlists"] })
+      qc.invalidateQueries({ queryKey: ["zones"] })
+      qc.invalidateQueries({ queryKey: ["zone-playlists"] })
+      qc.invalidateQueries({ queryKey: ["schedules"] })
+      toast.success(
+        zonesAffected || schedulesRemoved
+          ? `Access updated — removed from ${zonesAffected} zone${zonesAffected === 1 ? "" : "s"}, ${schedulesRemoved} schedule slot${schedulesRemoved === 1 ? "" : "s"}`
+          : "Access updated"
+      )
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+}
+
 export function useAssignPlaylist() {
   const qc = useQueryClient()
   return useMutation({

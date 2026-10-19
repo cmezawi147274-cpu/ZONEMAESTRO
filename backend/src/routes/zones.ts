@@ -8,7 +8,7 @@ import { forbidden, notFound, badRequest } from "../lib/http-error.js"
 import { queuePlaylistTracksForServer } from "../lib/zone-effects.js"
 import { pushToAgent } from "../lib/agent-registry.js"
 import { pushActivity } from "../lib/activity.js"
-import { scopedPlaylist, libraryReadWhere } from "../lib/tenant.js"
+import { scopedPlaylist, libraryReadWhere, assertPlaylistFitsZone } from "../lib/tenant.js"
 
 async function allowedLocationIds(organizationId: string) {
   const locs = await prisma.location.findMany({ where: { organizationId }, select: { id: true } })
@@ -146,6 +146,7 @@ export default async function zonesRoutes(app: FastifyInstance) {
       throw badRequest(`${server?.name ?? "Server"} is offline — playlist not assigned.`)
     }
     const playlist = await scopedPlaylist(scope, request.body.playlistId)
+    await assertPlaylistFitsZone(playlist, zone.id)
     const tracks = await prisma.playlistTrack.findMany({ where: { playlistId: playlist.id }, orderBy: { position: "asc" } })
     const excludedTrackIds = zone.currentPlaylistId !== playlist.id ? [] : zone.excludedTrackIds
     const firstTrack = tracks.find((t) => !excludedTrackIds.includes(t.trackId))?.trackId ?? null

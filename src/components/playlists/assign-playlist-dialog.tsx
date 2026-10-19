@@ -17,7 +17,7 @@ import { useOrganizations } from "@/hooks/use-organizations"
 import { useLocations } from "@/hooks/use-locations"
 import { useServers } from "@/hooks/use-servers"
 import { useZones } from "@/hooks/use-zones"
-import { useAssignPlaylist } from "@/hooks/use-playlists"
+import { useAssignPlaylist, usePlaylist } from "@/hooks/use-playlists"
 
 const STEPS = [
   { field: "organizationId", label: "Organization", placeholder: "Select organization" },
@@ -49,11 +49,14 @@ export function AssignPlaylistDialog({ playlistId }: { playlistId: string }) {
   const { data: servers } = useServers()
   const { data: zones } = useZones()
   const assign = useAssignPlaylist()
+  const { data: playlist } = usePlaylist(playlistId)
 
   const optionsForStep = (field: StepField): { id: string; label: string }[] => {
     switch (field) {
       case "organizationId":
-        return (organizations ?? []).map((o) => ({ id: o.id, label: o.name }))
+        return (organizations ?? [])
+          .filter((o) => !playlist?.organizationId || o.id === playlist.organizationId)
+          .map((o) => ({ id: o.id, label: o.name }))
       case "locationId":
         return (locations ?? [])
           .filter((l) => l.organizationId === selection.organizationId)

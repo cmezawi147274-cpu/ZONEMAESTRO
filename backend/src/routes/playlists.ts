@@ -3,10 +3,10 @@ import { prisma } from "../lib/db.js"
 import { toPlaylist, toPlaylistAssignment } from "../lib/serialize.js"
 import { requireAuth, requireUser, tenantScope, type TenantScope } from "../lib/auth-context.js"
 import { can } from "../lib/rbac.js"
-import { forbidden, notFound } from "../lib/http-error.js"
+import { forbidden, notFound, badRequest } from "../lib/http-error.js"
 import { queuePlaylistTracksForServer } from "../lib/zone-effects.js"
 import { audit } from "../lib/audit.js"
-import { scopedPlaylist, scopedAssignmentTarget, canMutateOwned } from "../lib/tenant.js"
+import { scopedPlaylist, scopedAssignmentTarget, canMutateOwned, assertPlaylistFitsZone } from "../lib/tenant.js"
 import type { PlaylistTargetType } from "@prisma/client"
 
 async function withTrackIds(playlistId: string): Promise<string[]> {
@@ -108,10 +108,64 @@ export default async function playlistsRoutes(app: FastifyInstance) {
       const scope = tenantScope(request)
       const existing = await scopedPlaylist(scope, request.params.id)
       if (!canMutateOwned(scope, existing.organizationId)) throw notFound("Playlist")
-      const { trackIds, ...rest } = request.body
-      const playlist = await prisma.playlist.update({ where: { id: existing.id }, data: rest })
+      const { name, description, trackIds } = request.body
+      const playlist = await prisma.playlist.update({ where: { id: existing.id }, data: { name, description } })
       if (trackIds) await replaceTrackIds(playlist.id, trackIds)
       return reply.send(toPlaylist(playlist, trackIds ?? (await withTrackIds(playlist.id))))
+    }
+  )
+
+  app.patch<{ Params: { id: string }; Body: { organizationId?: string | null } }>(
+    "/playlists/:id/access",
+    async (request, reply) => {
+      requireUser(request)
+      const scope = tenantScope(request)
+      if (!scope.isSuperAdmin) throw forbidden()
+      const requested = request.body?.organizationId
+      if (requested !== null && (typeof requested !== "string" || !requested)) {
+        throw badRequest("organizationId must be an organization id or null.")
+      }
+      const existing = await scopedPlaylist(scope, request.params.id)
+      const organizationId = await resolvePlaylistOrgId(scope, requested)
+      if (organizationId === existing.organizationId) {
+        return reply.send({ playlist: toPlaylist(existing, await withTrackIds(existing.id)), zonesAffected: 0, schedulesRemoved: 0 })
+      }
+
+      const result = await prisma.$transaction(async (tx) => {
+        const playlist = await tx.playlist.update({ where: { id: existing.id }, data: { organizationId } })
+        if (organizationId === null) return { playlist, zonesAffected: 0, schedulesRemoved: 0 }
+        const assignments = await tx.playlistAssignment.findMany({ where: { playlistId: existing.id, targetType: "ZONE" }, select: { targetId: true } })
+        const pointing = await tx.zone.findMany({ where: { OR: [{ currentPlaylistId: existing.id }, { prePrayerPlaylistId: existing.id }] }, select: { id: true } })
+        const slots = await tx.schedule.findMany({ where: { playlistId: existing.id }, select: { zoneId: true } })
+        const candidates = [...new Set([...assignments.map((a) => a.targetId), ...pointing.map((z) => z.id), ...slots.map((s) => s.zoneId)])]
+        const zoneIds = (
+          await tx.zone.findMany({ where: { id: { in: candidates }, server: { organizationId: { not: organizationId } } }, select: { id: true } })
+        ).map((z) => z.id)
+        if (zoneIds.length === 0) return { playlist, zonesAffected: 0, schedulesRemoved: 0 }
+        await tx.zone.updateMany({ where: { id: { in: zoneIds }, currentPlaylistId: existing.id }, data: { currentPlaylistId: null } })
+        await tx.zone.updateMany({ where: { id: { in: zoneIds }, prePrayerPlaylistId: existing.id }, data: { prePrayerPlaylistId: null } })
+        await tx.playlistAssignment.deleteMany({ where: { playlistId: existing.id, targetType: "ZONE", targetId: { in: zoneIds } } })
+        const removed = await tx.schedule.deleteMany({ where: { playlistId: existing.id, zoneId: { in: zoneIds } } })
+        return { playlist, zonesAffected: zoneIds.length, schedulesRemoved: removed.count }
+      })
+
+      await audit(request, {
+        action: "playlist.access_change",
+        targetType: "Playlist",
+        targetId: existing.id,
+        summary: `Changed access of playlist ${existing.id}.`,
+        metadata: {
+          before: { organizationId: existing.organizationId },
+          after: { organizationId },
+          zonesAffected: result.zonesAffected,
+          schedulesRemoved: result.schedulesRemoved,
+        },
+      })
+      return reply.send({
+        playlist: toPlaylist(result.playlist, await withTrackIds(existing.id)),
+        zonesAffected: result.zonesAffected,
+        schedulesRemoved: result.schedulesRemoved,
+      })
     }
   )
 
@@ -162,6 +216,7 @@ export default async function playlistsRoutes(app: FastifyInstance) {
       const { targetType, targetId } = request.body
       const playlist = await scopedPlaylist(scope, request.params.id)
       await scopedAssignmentTarget(scope, targetType, targetId)
+      if (targetType === "ZONE") await assertPlaylistFitsZone(playlist, targetId)
 
       const existingAssignment = await prisma.playlistAssignment.findFirst({
         where: { playlistId: playlist.id, targetType, targetId },

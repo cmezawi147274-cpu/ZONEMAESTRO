@@ -13,6 +13,12 @@ export interface CreatePlaylistInput {
   trackIds?: string[]
 }
 
+export interface PlaylistAccessResult {
+  playlist: Playlist
+  zonesAffected: number
+  schedulesRemoved: number
+}
+
 export const playlistsApi = {
   async list(organizationId?: string | null): Promise<Playlist[]> {
     if (isMockMode) {
@@ -98,6 +104,18 @@ export const playlistsApi = {
       return { ...playlist }
     }
     return apiClient.patch<Playlist>(`/playlists/${id}`, input)
+  },
+
+  async setAccess(id: string, organizationId: string | null): Promise<PlaylistAccessResult> {
+    if (isMockMode) {
+      await delay(300)
+      const playlist = store.playlists.find((p) => p.id === id)
+      if (!playlist) throw new Error("Playlist not found")
+      playlist.organizationId = organizationId
+      playlist.updatedAt = new Date().toISOString()
+      return { playlist: { ...playlist }, zonesAffected: 0, schedulesRemoved: 0 }
+    }
+    return apiClient.patch<PlaylistAccessResult>(`/playlists/${id}/access`, { organizationId })
   },
 
   async reorderTracks(id: string, trackIds: string[]): Promise<Playlist> {

@@ -26,7 +26,7 @@
  */
 import { prisma } from "./db.js"
 import type { TenantScope } from "./auth-context.js"
-import { notFound, forbidden } from "./http-error.js"
+import { notFound, forbidden, badRequest } from "./http-error.js"
 import type { PlaylistTargetType } from "@prisma/client"
 
 /**
@@ -113,6 +113,14 @@ export async function scopedPlaylist(scope: TenantScope, playlistId: string) {
     throw notFound("Playlist")
   }
   return playlist
+}
+
+export async function assertPlaylistFitsZone(playlist: { organizationId: string | null }, zoneId: string) {
+  if (playlist.organizationId === null) return
+  const zone = await prisma.zone.findUnique({ where: { id: zoneId }, select: { server: { select: { organizationId: true } } } })
+  if (zone?.server.organizationId !== playlist.organizationId) {
+    throw badRequest("This playlist belongs to another organization and cannot be assigned to this zone.")
+  }
 }
 
 /**
