@@ -286,6 +286,7 @@ describe("subscription", { skip }, () => {
     assert.deepEqual(r.dismissed, [])
     assert.equal(r.connection_count, LEGACY.connection_count)
     assert.equal(r.last_connection_at.toISOString(), LEGACY.last_connection_at)
+    assert.equal(r.duration_months, 12, "an existing row did not get the 12-month duration")
     assert.deepEqual(r.events.slice(0, 1), LEGACY.events)
     assert.deepEqual(r.events.map((e: any) => e.type), ["created", "carried_over", "restarted"])
     const carried = r.events[1]
@@ -649,6 +650,7 @@ describe("subscription", { skip }, () => {
       ["POST", "/api/subscription/servers/srv-demo/banners/30/dismiss"],
       ["POST", "/api/subscription/servers/srv-demo/export", { format: "json" }],
       ["POST", "/api/subscription/servers/srv-demo/renew", { confirmEndDate: "2000-01-01" }],
+      ["PUT", "/api/subscription/servers/srv-demo/duration", { months: 6, confirmEndDate: "2000-01-01" }],
     ]
     for (const [method, url, body] of endpoints) {
       for (const role of ["ORGANIZATION_ADMIN", "LOCATION_MANAGER", "VIEWER"]) {
@@ -720,6 +722,133 @@ describe("subscription", { skip }, () => {
     const list = await call(SUPER(), "GET", "/api/subscription/servers")
     const row = list.body.servers.find((s: any) => s.serverId === "srv-future")
     assert.ok(new Date(list.body.now).getTime() < new Date(row.startedAt).getTime())
+  })
+
+  test("changing the duration from 12 to 6 moves only that server's current end", async () => {
+    await prisma.$executeRawUnsafe(`INSERT INTO "MusicServer" (id, name, "organizationId") VALUES ('srv-c', 'Charlie', 'org-1')`)
+    await hooks.onClientConnected({ source: "hub", serverId: "srv-c" })
+    const before = await one("srv-c")
+    assert.equal(before.duration_months, 12)
+    const others = (await snapshot()).filter((r: any) => r.server_id !== "srv-c")
+    const typed = before.ends_at.toISOString().slice(0, 10)
+
+    const wrong = await call(SUPER(), "PUT", "/api/subscription/servers/srv-c/duration", { months: 6, confirmEndDate: "1999-01-01" })
+    assert.equal(wrong.status, 400)
+    assert.deepEqual(full(await one("srv-c")), full(before), "a mismatched date changed the row")
+
+    const ok = await call(SUPER(), "PUT", "/api/subscription/servers/srv-c/duration", { months: 6, confirmEndDate: typed })
+    assert.equal(ok.status, 200)
+    assert.equal(ok.body.record.durationMonths, 6)
+    const after = await one("srv-c")
+    const newEnd = time.addCalendarMonthsUTC(before.started_at, 6).toISOString()
+    assert.equal(after.ends_at.toISOString(), newEnd)
+    assert.equal(after.duration_months, 6)
+    assert.equal(after.started_at.toISOString(), before.started_at.toISOString())
+    assert.deepEqual(after.terms, [{ ...before.terms[0], endsAt: newEnd }])
+    assert.equal(after.notes, before.notes)
+    assert.deepEqual(after.reminder_days, before.reminder_days)
+    assert.deepEqual(after.dismissed, before.dismissed)
+    assert.equal(after.connection_count, before.connection_count)
+    assert.equal(after.last_connection_at.toISOString(), before.last_connection_at.toISOString())
+    const added = after.events.slice(before.events.length)
+    assert.equal(added.length, 1)
+    assert.equal(added[0].type, "duration_changed")
+    assert.equal(added[0].previousDurationMonths, 12)
+    assert.equal(added[0].durationMonths, 6)
+    assert.equal(added[0].previousEndsAt, before.ends_at.toISOString())
+    assert.equal(added[0].endsAt, newEnd)
+    assert.equal(added[0].by.email, "super@example.test")
+    assert.deepEqual((await snapshot()).filter((r: any) => r.server_id !== "srv-c"), others, "another server changed")
+
+    const list = await call(SUPER(), "GET", "/api/subscription/servers")
+    assert.equal(list.body.servers.find((s: any) => s.serverId === "srv-c").endsAt, newEnd)
+    const fleet = await call(SUPER(), "GET", "/api/subscription/export")
+    assert.ok(fleet.body.content.includes(`Charlie | North Org | Active | ${time.formatUTC(before.started_at.toISOString())} | ${time.formatUTC(newEnd)}`))
+    const detail = await call(SUPER(), "GET", "/api/subscription/servers/srv-c")
+    assert.equal(detail.body.record.endsAt, newEnd)
+  })
+
+  test("changing a renewed server's duration keeps its start and older terms", async () => {
+    const before = await one("srv-b")
+    assert.ok(before.terms.length >= 2)
+    const res = await call(SUPER(), "PUT", "/api/subscription/servers/srv-b/duration", {
+      months: 3,
+      confirmEndDate: before.ends_at.toISOString().slice(0, 10),
+    })
+    assert.equal(res.status, 200)
+    const after = await one("srv-b")
+    const last = before.terms.length - 1
+    const newEnd = time.addCalendarMonthsUTC(new Date(before.terms[last].startedAt), 3).toISOString()
+    assert.deepEqual(after.terms.slice(0, last), before.terms.slice(0, last), "an older term changed")
+    assert.deepEqual(after.terms[last], { ...before.terms[last], endsAt: newEnd })
+    assert.equal(after.ends_at.toISOString(), newEnd)
+    assert.equal(after.started_at.toISOString(), before.started_at.toISOString())
+  })
+
+  test("durations outside 1 to 60 or not whole numbers are rejected", async () => {
+    const before = await snapshot()
+    const typed = (await one("srv-c")).ends_at.toISOString().slice(0, 10)
+    for (const months of [0, 61, -3, 6.5, "6", "abc", null]) {
+      const res = await call(SUPER(), "PUT", "/api/subscription/servers/srv-c/duration", { months, confirmEndDate: typed })
+      assert.equal(res.status, 400, `months ${JSON.stringify(months)} was accepted`)
+    }
+    assert.equal((await call(SUPER(), "PUT", "/api/subscription/servers/srv-c/duration", { months: 6 })).status, 400)
+    assert.deepEqual(await snapshot(), before)
+  })
+
+  test("not-started, removed and fixture servers have no duration action", async () => {
+    const before = await snapshot()
+    for (const id of ["srv-idle", "srv-gone", "zzhub-fixture"]) {
+      const res = await call(SUPER(), "PUT", `/api/subscription/servers/${id}/duration`, { months: 6, confirmEndDate: "2027-01-01" })
+      assert.equal(res.status, 404, `${id} returned ${res.status}`)
+    }
+    assert.deepEqual(await snapshot(), before)
+    assert.equal(await one("srv-idle"), null)
+    assert.equal(await one("zzhub-fixture"), null)
+  })
+
+  test("renewal after a duration change adds one term of the new duration", async () => {
+    const before = await one("srv-c")
+    assert.equal(before.duration_months, 6)
+    const res = await call(SUPER(), "POST", "/api/subscription/servers/srv-c/renew", { confirmEndDate: before.ends_at.toISOString().slice(0, 10) })
+    assert.equal(res.status, 200)
+    const after = await one("srv-c")
+    assert.equal(after.terms.length, before.terms.length + 1)
+    const added = after.terms[after.terms.length - 1]
+    assert.equal(added.startedAt, before.ends_at.toISOString())
+    assert.equal(added.endsAt, time.addCalendarMonthsUTC(before.ends_at, 6).toISOString())
+    assert.equal(after.ends_at.toISOString(), added.endsAt)
+    assert.equal(after.duration_months, 6)
+    assert.deepEqual(after.terms.slice(0, before.terms.length), before.terms)
+  })
+
+  test("a failed duration write leaves the row as it was", async () => {
+    const before = full(await one("srv-c"))
+    const original = prisma.$transaction
+    const warn = console.warn
+    const warnings: string[] = []
+    console.warn = (...args: unknown[]) => void warnings.push(args.join(" "))
+    let failedWrites = 0
+    prisma.$transaction = async (ops: unknown[]) => {
+      if (Array.isArray(ops) && ops.length === 3) {
+        failedWrites++
+        throw new Error("forced write failure")
+      }
+      return original.call(prisma, ops)
+    }
+    try {
+      const res = await call(SUPER(), "PUT", "/api/subscription/servers/srv-c/duration", {
+        months: 12,
+        confirmEndDate: before!.ends_at.slice(0, 10),
+      })
+      assert.equal(res.status, 503)
+    } finally {
+      prisma.$transaction = original
+      console.warn = warn
+    }
+    assert.equal(failedWrites, 1, "the duration write was not the step that failed")
+    assert.ok(warnings.some((w) => w.startsWith("[subscription]")))
+    assert.deepEqual(full(await one("srv-c")), before)
   })
 
   test("the legacy row was never written", async () => {

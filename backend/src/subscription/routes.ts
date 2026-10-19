@@ -16,6 +16,8 @@ import {
 
 const MAX_NOTES = 10_000
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+const MIN_MONTHS = 1
+const MAX_MONTHS = 60
 
 type Params = { serverId: string }
 
@@ -250,6 +252,25 @@ export default async function subscriptionRoutes(app: FastifyInstance) {
         const { serverId } = await requireServer(request.params.serverId)
         const renewed = await store.renew(serverId, typed, actor, new Date())
         if (renewed) return renewed
+        const current = await store.readRecord(serverId)
+        if (!current) throw notFound("Subscription")
+        throw badRequest("The date you typed does not match the current end date.")
+      })
+      return reply.send({ record, now: new Date().toISOString() })
+    })
+
+    app.put<{ Params: Params; Body: { months?: unknown; confirmEndDate?: unknown } }>("/subscription/servers/:serverId/duration", async (request, reply) => {
+      const actor = superAdmin(request)
+      const months = request.body?.months
+      if (typeof months !== "number" || !Number.isInteger(months) || months < MIN_MONTHS || months > MAX_MONTHS) {
+        throw badRequest(`months must be a whole number from ${MIN_MONTHS} to ${MAX_MONTHS}.`)
+      }
+      const typed = request.body?.confirmEndDate
+      if (typeof typed !== "string" || !DATE_RE.test(typed)) throw badRequest("Type the current end date as YYYY-MM-DD.")
+      const record = await guarded("could not change the duration", async () => {
+        const { serverId } = await requireServer(request.params.serverId)
+        const changed = await store.changeDuration(serverId, months, typed, actor, new Date())
+        if (changed) return changed
         const current = await store.readRecord(serverId)
         if (!current) throw notFound("Subscription")
         throw badRequest("The date you typed does not match the current end date.")

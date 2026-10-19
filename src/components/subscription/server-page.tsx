@@ -14,9 +14,11 @@ import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useAuth } from "@/hooks/use-auth"
 import type { ServerInfo, SubscriptionEvent, SubscriptionRecord } from "@/components/subscription/api"
 import {
+  useChangeSubscriptionDuration,
   useDismissSubscriptionBanner,
   useExportSubscription,
   useRenewSubscription,
@@ -25,7 +27,7 @@ import {
   useServerSubscription,
   useServerSubscriptionClock,
 } from "@/components/subscription/hooks"
-import { BAND_LABEL, DAY_MS, REMINDER_DAYS, ageLabel, derive, formatSpan, formatUTC, type Band, type Span } from "@/components/subscription/derive"
+import { BAND_LABEL, DAY_MS, REMINDER_DAYS, addCalendarMonthsUTC, ageLabel, derive, formatSpan, formatUTC, type Band, type Span } from "@/components/subscription/derive"
 
 export const BAND_CLASS: Record<Band | "not_started", string> = {
   active: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
@@ -35,6 +37,9 @@ export const BAND_CLASS: Record<Band | "not_started", string> = {
   ended: "bg-muted text-muted-foreground",
   not_started: "border-border text-muted-foreground",
 }
+
+const DURATION_PRESETS = [1, 3, 6, 12, 24, 36]
+const monthsLabel = (n: number) => `${n} month${n === 1 ? "" : "s"}`
 
 const COUNTDOWN_MARKS = [
   { label: "30 days left", days: 30, className: "bg-amber-500" },
@@ -60,6 +65,8 @@ function eventLabel(e: SubscriptionEvent): string {
       return `Exported (${e.format === "text" ? "summary" : "JSON"})${e.by ? ` by ${e.by.email}` : ""}`
     case "renewal_confirmed":
       return `Renewal confirmed${e.by ? ` by ${e.by.email}` : ""}`
+    case "duration_changed":
+      return `Duration changed from ${monthsLabel(e.previousDurationMonths ?? 0)} to ${monthsLabel(e.durationMonths ?? 0)}${e.by ? ` by ${e.by.email}` : ""}`
     default:
       return e.type
   }
@@ -100,8 +107,17 @@ function Content({ server, record, now }: { server: ServerInfo; record: Subscrip
   const saveNotes = useSaveSubscriptionNotes(server.serverId)
   const exportFile = useExportSubscription(server.serverId)
   const renew = useRenewSubscription(server.serverId)
+  const changeDuration = useChangeSubscriptionDuration(server.serverId)
   const [notes, setNotes] = useState(record.notes)
   const [typedEnd, setTypedEnd] = useState("")
+  const isPreset = DURATION_PRESETS.includes(record.durationMonths)
+  const [durationChoice, setDurationChoice] = useState(isPreset ? String(record.durationMonths) : "custom")
+  const [customMonths, setCustomMonths] = useState(isPreset ? "" : String(record.durationMonths))
+  const [typedDurationEnd, setTypedDurationEnd] = useState("")
+  const chosenMonths = Number(durationChoice === "custom" ? customMonths : durationChoice)
+  const monthsValid = Number.isInteger(chosenMonths) && chosenMonths >= 1 && chosenMonths <= 60
+  const currentTerm = record.terms[record.terms.length - 1]
+  const previewEnd = monthsValid ? addCalendarMonthsUTC(new Date(currentTerm.startedAt), chosenMonths).toISOString() : null
   const endDate = record.endsAt.slice(0, 10)
   const meta = record.createdByConnection
 
@@ -280,11 +296,82 @@ function Content({ server, record, now }: { server: ServerInfo; record: Subscrip
 
       <Card>
         <CardHeader>
+          <CardTitle>Duration</CardTitle>
+          <CardDescription>
+            The current term (term {currentTerm.index}) is {monthsLabel(record.durationMonths)}, from {formatUTC(currentTerm.startedAt)}. Changing it
+            moves only this term&apos;s end. Type the current end date ({endDate}) to confirm.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap gap-2">
+            <Select
+              value={durationChoice}
+              onValueChange={(v) => setDurationChoice(v ?? String(record.durationMonths))}
+              items={{ ...Object.fromEntries(DURATION_PRESETS.map((m) => [String(m), monthsLabel(m)])), custom: "Custom" }}
+            >
+              <SelectTrigger className="w-40">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {DURATION_PRESETS.map((m) => (
+                  <SelectItem key={m} value={String(m)}>
+                    {monthsLabel(m)}
+                  </SelectItem>
+                ))}
+                <SelectItem value="custom">Custom</SelectItem>
+              </SelectContent>
+            </Select>
+            {durationChoice === "custom" && (
+              <Input
+                className="w-28"
+                type="number"
+                min={1}
+                max={60}
+                step={1}
+                placeholder="1 to 60"
+                value={customMonths}
+                onChange={(e) => setCustomMonths(e.target.value)}
+              />
+            )}
+          </div>
+          <p className="text-sm text-muted-foreground">
+            {!monthsValid
+              ? "Choose a whole number of months from 1 to 60."
+              : chosenMonths === record.durationMonths
+                ? `This is the current duration. The term ends ${formatUTC(record.endsAt)}.`
+                : `New end: ${formatUTC(previewEnd!)}${new Date(previewEnd!).getTime() <= new Date(now).getTime() ? " (the term would be Ended)" : ""}.`}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Input
+              className="w-40"
+              placeholder="YYYY-MM-DD"
+              value={typedDurationEnd}
+              onChange={(e) => setTypedDurationEnd(e.target.value)}
+            />
+            <Button
+              size="sm"
+              disabled={!monthsValid || chosenMonths === record.durationMonths || typedDurationEnd !== endDate || changeDuration.isPending}
+              onClick={() =>
+                changeDuration.mutate(
+                  { months: chosenMonths, confirmEndDate: typedDurationEnd },
+                  { onSuccess: () => setTypedDurationEnd("") }
+                )
+              }
+            >
+              {changeDuration.isPending && <Loader2 className="size-4 animate-spin" />}
+              Change duration
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>Renewal</CardTitle>
           <CardDescription>
             {d.remainingMs > 0
-              ? `Adds a term from ${formatUTC(record.endsAt)} to 12 months later.`
-              : "Adds a term from now to 12 months from now."}{" "}
+              ? `Adds a term from ${formatUTC(record.endsAt)} to ${monthsLabel(record.durationMonths)} later.`
+              : `Adds a term from now to ${monthsLabel(record.durationMonths)} from now.`}{" "}
             Type the current end date ({endDate}) to confirm.
           </CardDescription>
         </CardHeader>
@@ -296,7 +383,7 @@ function Content({ server, record, now }: { server: ServerInfo; record: Subscrip
             onClick={() => renew.mutate(typedEnd, { onSuccess: () => setTypedEnd("") })}
           >
             {renew.isPending && <Loader2 className="size-4 animate-spin" />}
-            Add 12 months
+            Add {monthsLabel(record.durationMonths)}
           </Button>
         </CardContent>
       </Card>

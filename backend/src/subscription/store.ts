@@ -35,6 +35,7 @@ export interface SubscriptionRecord {
   dismissed: { term: number; threshold: number; at: string }[]
   connectionCount: number
   lastConnectionAt: string
+  durationMonths: number
 }
 
 export interface ServerInfo {
@@ -67,6 +68,7 @@ const CARRIED_OVER_NOTE = "This connection count and last connection were fleet-
 const ISO_FORMAT = `'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'`
 const iso = (expr: string) => `to_char((${expr}) AT TIME ZONE 'UTC', ${ISO_FORMAT})`
 const plus12Months = (expr: string) => `(((${expr}) AT TIME ZONE 'UTC') + interval '12 months') AT TIME ZONE 'UTC'`
+const plusMonths = (expr: string, months: string) => `(((${expr}) AT TIME ZONE 'UTC') + make_interval(months => ${months})) AT TIME ZONE 'UTC'`
 
 const thresholdEvents = (nowParam: string) => `COALESCE((
   SELECT jsonb_agg(jsonb_build_object(
@@ -105,6 +107,7 @@ const ENSURE_SQL = [
     connection_count integer NOT NULL,
     last_connection_at timestamptz NOT NULL
   )`,
+  `ALTER TABLE ${TABLE} ADD COLUMN IF NOT EXISTS duration_months integer NOT NULL DEFAULT 12 CHECK (duration_months BETWEEN 1 AND 60)`,
 ]
 
 const LEGACY_EXISTS_SQL = `SELECT to_regclass('${LEGACY_TABLE}') IS NOT NULL AS present`
@@ -182,11 +185,11 @@ const EXPORT_SQL = `UPDATE ${TABLE} AS r SET
 const newStart = `CASE WHEN r.ends_at > $2::timestamptz THEN r.ends_at ELSE $2::timestamptz END`
 
 const RENEW_SQL = `UPDATE ${TABLE} AS r SET
-    ends_at = ${plus12Months(newStart)},
+    ends_at = ${plusMonths(newStart, "r.duration_months")},
     terms = r.terms || jsonb_build_array(jsonb_build_object(
       'index', jsonb_array_length(r.terms) + 1,
       'startedAt', ${iso(newStart)},
-      'endsAt', ${iso(plus12Months(newStart))},
+      'endsAt', ${iso(plusMonths(newStart, "r.duration_months"))},
       'reason', 'renewal',
       'confirmedBy', jsonb_build_object('type', 'user', 'userId', $3::jsonb->>'userId', 'email', $3::jsonb->>'email')
     )),
@@ -197,9 +200,30 @@ const RENEW_SQL = `UPDATE ${TABLE} AS r SET
       'term', jsonb_array_length(r.terms) + 1,
       'by', $3::jsonb,
       'previousEndsAt', ${iso("r.ends_at")},
-      'endsAt', ${iso(plus12Months(newStart))}
+      'endsAt', ${iso(plusMonths(newStart, "r.duration_months"))}
     ))
   WHERE r.server_id = $1 AND to_char(r.ends_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') = $4
+  RETURNING r.*`
+
+const currentTermStart = `((r.terms -> (jsonb_array_length(r.terms) - 1)) ->> 'startedAt')::timestamptz`
+const newEnd = plusMonths(currentTermStart, "$2::int")
+
+const DURATION_SQL = `UPDATE ${TABLE} AS r SET
+    ends_at = ${newEnd},
+    duration_months = $2::int,
+    terms = jsonb_set(r.terms, ARRAY[(jsonb_array_length(r.terms) - 1)::text, 'endsAt'], to_jsonb(${iso(newEnd)})),
+    events = r.events || jsonb_build_array(jsonb_build_object(
+      'id', gen_random_uuid()::text,
+      'type', 'duration_changed',
+      'at', ${iso("$3::timestamptz")},
+      'term', jsonb_array_length(r.terms),
+      'by', $4::jsonb,
+      'previousDurationMonths', r.duration_months,
+      'durationMonths', $2::int,
+      'previousEndsAt', ${iso("r.ends_at")},
+      'endsAt', ${iso(newEnd)}
+    ))
+  WHERE r.server_id = $1 AND to_char(r.ends_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') = $5
   RETURNING r.*`
 
 const READ_ONE_SQL = `SELECT * FROM ${TABLE} WHERE server_id = $1`
@@ -292,6 +316,7 @@ interface Row {
   dismissed: { term: number; threshold: number; at: string }[]
   connection_count: number
   last_connection_at: Date
+  duration_months: number
 }
 
 function toRecord(row: Row): SubscriptionRecord {
@@ -309,6 +334,7 @@ function toRecord(row: Row): SubscriptionRecord {
     dismissed: row.dismissed,
     connectionCount: row.connection_count,
     lastConnectionAt: row.last_connection_at.toISOString(),
+    durationMonths: row.duration_months,
   }
 }
 
@@ -417,4 +443,8 @@ export function appendExport(serverId: string, format: "json" | "text", actor: A
 
 export function renew(serverId: string, confirmEndDate: string, actor: Actor, at: Date) {
   return update(RENEW_SQL, serverId, at.toISOString(), JSON.stringify(actor), confirmEndDate)
+}
+
+export function changeDuration(serverId: string, months: number, confirmEndDate: string, actor: Actor, at: Date) {
+  return update(DURATION_SQL, serverId, months, at.toISOString(), JSON.stringify(actor), confirmEndDate)
 }

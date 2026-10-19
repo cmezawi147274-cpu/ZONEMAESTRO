@@ -62,8 +62,16 @@ export function useDismissSubscriptionBanner(serverId: string) {
   return useRecordMutation(serverId, (days: number) => subscriptionApi.dismissBanner(serverId, days))
 }
 
+export function useChangeSubscriptionDuration(serverId: string) {
+  return useRecordMutation(
+    serverId,
+    ({ months, confirmEndDate }: { months: number; confirmEndDate: string }) => subscriptionApi.changeDuration(serverId, months, confirmEndDate),
+    "Duration changed"
+  )
+}
+
 export function useRenewSubscription(serverId: string) {
-  return useRecordMutation(serverId, (confirmEndDate: string) => subscriptionApi.renew(serverId, confirmEndDate), "Added 12 months")
+  return useRecordMutation(serverId, (confirmEndDate: string) => subscriptionApi.renew(serverId, confirmEndDate), "Renewal added")
 }
 
 export function useExportSubscription(serverId: string) {

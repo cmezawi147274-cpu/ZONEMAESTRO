@@ -24,6 +24,8 @@ export interface SubscriptionEvent {
   reminderDays?: number[]
   previousEndsAt?: string
   endsAt?: string
+  previousDurationMonths?: number
+  durationMonths?: number
 }
 
 export interface SubscriptionRecord {
@@ -40,6 +42,7 @@ export interface SubscriptionRecord {
   dismissed: { term: number; threshold: number; at: string }[]
   connectionCount: number
   lastConnectionAt: string
+  durationMonths: number
 }
 
 export interface ServerInfo {
@@ -123,6 +126,7 @@ function demoRecord(serverId: string, daysAgo: number): SubscriptionRecord {
     dismissed: [],
     connectionCount: 1,
     lastConnectionAt: startedAt.toISOString(),
+    durationMonths: 12,
   }
 }
 
@@ -255,7 +259,7 @@ export const subscriptionApi = {
       if (record.endsAt.slice(0, 10) !== confirmEndDate) throw new Error("The date you typed does not match the current end date.")
       const now = new Date()
       const start = new Date(record.endsAt) > now ? new Date(record.endsAt) : now
-      const end = addCalendarMonthsUTC(start, 12)
+      const end = addCalendarMonthsUTC(start, record.durationMonths)
       const index = record.terms.length + 1
       record.terms = [
         ...record.terms,
@@ -269,5 +273,30 @@ export const subscriptionApi = {
       return demoResponse(record)
     }
     return apiClient.post<RecordResponse>(`/subscription/servers/${encodeURIComponent(serverId)}/renew`, { confirmEndDate })
+  },
+
+  async changeDuration(serverId: string, months: number, confirmEndDate: string): Promise<RecordResponse> {
+    if (isMockMode) {
+      await delay(300)
+      const record = demoRequire(serverId)
+      if (record.endsAt.slice(0, 10) !== confirmEndDate) throw new Error("The date you typed does not match the current end date.")
+      const term = record.terms[record.terms.length - 1]
+      const end = addCalendarMonthsUTC(new Date(term.startedAt), months).toISOString()
+      record.events = [
+        ...record.events,
+        demoEvent(record, "duration_changed", {
+          by: DEMO_ACTOR,
+          previousDurationMonths: record.durationMonths,
+          durationMonths: months,
+          previousEndsAt: record.endsAt,
+          endsAt: end,
+        }),
+      ]
+      record.terms = record.terms.map((t, i) => (i === record.terms.length - 1 ? { ...t, endsAt: end } : t))
+      record.endsAt = end
+      record.durationMonths = months
+      return demoResponse(record)
+    }
+    return apiClient.put<RecordResponse>(`/subscription/servers/${encodeURIComponent(serverId)}/duration`, { months, confirmEndDate })
   },
 }
