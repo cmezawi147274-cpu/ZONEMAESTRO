@@ -1,4 +1,4 @@
-import type { SubscriptionRecord } from "@/components/subscription/api"
+import type { FleetServer, FleetSummary, ServerInfo, SubscriptionRecord } from "@/components/subscription/api"
 
 export const DAY_MS = 86_400_000
 export const REMINDER_DAYS = [90, 30, 7, 1] as const
@@ -123,10 +123,101 @@ export function derive(startedAt: string, endsAt: string, now: string, record?: 
   }
 }
 
-export function buildSummary(record: SubscriptionRecord, now: string): string {
+export type FleetStatus = Band | "not_started"
+
+export const STATUS_ORDER: FleetStatus[] = ["ended", "critical", "warning", "attention", "active", "not_started"]
+
+export const STATUS_LABEL: Record<FleetStatus, string> = { ...BAND_LABEL, not_started: "Not started" }
+
+export function statusFor(endsAt: string | null | undefined, now: string): FleetStatus {
+  return endsAt ? bandFor(new Date(endsAt).getTime() - new Date(now).getTime()) : "not_started"
+}
+
+export function compareFleet(a: { status: FleetStatus; name: string }, b: { status: FleetStatus; name: string }): number {
+  const byStatus = STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status)
+  return byStatus !== 0 ? byStatus : a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
+}
+
+export function fleetRows(servers: ServerInfo[], records: SubscriptionRecord[], now: string): FleetServer[] {
+  const byServer = new Map(records.map((r) => [r.serverId, r]))
+  return servers
+    .map((s) => {
+      const record = byServer.get(s.serverId) ?? null
+      return {
+        ...s,
+        status: statusFor(record?.endsAt, now),
+        startedAt: record?.startedAt ?? null,
+        endsAt: record?.endsAt ?? null,
+        connectionCount: record?.connectionCount ?? 0,
+        lastConnectionAt: record?.lastConnectionAt ?? null,
+      }
+    })
+    .sort(compareFleet)
+}
+
+export function summarizeFleet(rows: { status: FleetStatus }[]): FleetSummary {
+  const count = (s: FleetStatus) => rows.filter((r) => r.status === s).length
+  return {
+    total: rows.length,
+    notStarted: count("not_started"),
+    active: count("active"),
+    attention: count("attention"),
+    warning: count("warning"),
+    critical: count("critical"),
+    ended: count("ended"),
+  }
+}
+
+export function filterFleet<T extends { name: string; organizationName: string | null; status: FleetStatus }>(
+  rows: T[],
+  search: string,
+  status: FleetStatus | "all"
+): T[] {
+  const q = search.trim().toLowerCase()
+  return rows.filter(
+    (r) =>
+      (status === "all" || r.status === status) &&
+      (!q || r.name.toLowerCase().includes(q) || (r.organizationName ?? "").toLowerCase().includes(q))
+  )
+}
+
+export function ageLabel(iso: string | null, now: string): string {
+  if (!iso) return "-"
+  const ms = new Date(now).getTime() - new Date(iso).getTime()
+  if (ms < 0) return "in the future"
+  const minutes = Math.floor(ms / 60_000)
+  if (minutes < 1) return "just now"
+  if (minutes < 60) return `${minutes} min ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} h ago`
+  return `${Math.floor(hours / 24)} d ago`
+}
+
+export function buildFleetSummary(rows: FleetServer[], summary: FleetSummary, now: string, label: string): string {
+  const cell = (v: string | null) => (v ? formatUTC(v) : "-")
+  const lines = [
+    `Subscription fleet summary: ${label}`,
+    `As of: ${formatUTC(now)}`,
+    "",
+    `Total: ${summary.total}`,
+    `Not started: ${summary.notStarted}`,
+    `Active: ${summary.active}`,
+    `Attention: ${summary.attention}`,
+    `Warning: ${summary.warning}`,
+    `Critical: ${summary.critical}`,
+    `Ended: ${summary.ended}`,
+    "",
+    "Server | Organization | Status | Start | End",
+    ...rows.map((r) => [r.name, r.organizationName ?? "-", STATUS_LABEL[r.status], cell(r.startedAt), cell(r.endsAt)].join(" | ")),
+  ]
+  return lines.join("\n") + "\n"
+}
+
+export function buildSummary(server: ServerInfo, record: SubscriptionRecord, now: string): string {
   const d = derive(record.startedAt, record.endsAt, now)
   const lines = [
-    `Subscription summary: ${record.serverLabel}`,
+    `Subscription summary: ${server.name}`,
+    `Organization: ${server.organizationName ?? "-"}`,
     `Record: ${record.id}`,
     `Status: ${BAND_LABEL[d.band]}`,
     `Start: ${formatUTC(record.startedAt)}`,

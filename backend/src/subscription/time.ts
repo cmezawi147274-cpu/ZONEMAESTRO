@@ -56,6 +56,21 @@ export const BAND_LABEL: Record<Band, string> = {
   ended: "Ended",
 }
 
+export type FleetStatus = Band | "not_started"
+
+export const STATUS_ORDER: FleetStatus[] = ["ended", "critical", "warning", "attention", "active", "not_started"]
+
+export const STATUS_LABEL: Record<FleetStatus, string> = { ...BAND_LABEL, not_started: "Not started" }
+
+export function statusFor(endsAt: string | null | undefined, now: Date): FleetStatus {
+  return endsAt ? bandFor(new Date(endsAt).getTime() - now.getTime()) : "not_started"
+}
+
+export function compareFleet(a: { status: FleetStatus; name: string }, b: { status: FleetStatus; name: string }): number {
+  const byStatus = STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status)
+  return byStatus !== 0 ? byStatus : a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
+}
+
 export function formatSpan(span: Span): string {
   const part = (n: number, unit: string) => `${n} ${unit}${n === 1 ? "" : "s"}`
   return [part(span.months, "month"), part(span.days, "day"), part(span.hours, "hour"), part(span.minutes, "minute")].join(", ")

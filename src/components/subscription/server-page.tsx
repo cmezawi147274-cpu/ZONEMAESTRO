@@ -1,7 +1,8 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { BellRing, CalendarClock, Download, Loader2, X } from "lucide-react"
+import Link from "next/link"
+import { ArrowLeft, BellRing, CalendarClock, Download, Loader2, X } from "lucide-react"
 import { PageHeader } from "@/components/common/page-header"
 import { EmptyState } from "@/components/common/empty-state"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -14,30 +15,33 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { useAuth } from "@/hooks/use-auth"
-import type { SubscriptionEvent, SubscriptionRecord } from "@/components/subscription/api"
+import type { ServerInfo, SubscriptionEvent, SubscriptionRecord } from "@/components/subscription/api"
 import {
   useDismissSubscriptionBanner,
   useExportSubscription,
   useRenewSubscription,
   useSaveSubscriptionNotes,
   useSaveSubscriptionReminders,
-  useSubscription,
-  useSubscriptionClock,
+  useServerSubscription,
+  useServerSubscriptionClock,
 } from "@/components/subscription/hooks"
-import { BAND_LABEL, REMINDER_DAYS, derive, formatSpan, formatUTC, type Band, type Span } from "@/components/subscription/derive"
+import { BAND_LABEL, REMINDER_DAYS, ageLabel, derive, formatSpan, formatUTC, type Band, type Span } from "@/components/subscription/derive"
 
-const BAND_CLASS: Record<Band, string> = {
+export const BAND_CLASS: Record<Band | "not_started", string> = {
   active: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
   attention: "bg-sky-500/10 text-sky-700 dark:text-sky-400",
   warning: "bg-amber-500/10 text-amber-700 dark:text-amber-400",
   critical: "bg-destructive/10 text-destructive",
   ended: "bg-muted text-muted-foreground",
+  not_started: "border-border text-muted-foreground",
 }
 
 function eventLabel(e: SubscriptionEvent): string {
   switch (e.type) {
     case "created":
       return "Created on the first venue connection"
+    case "carried_over":
+      return e.note ? `Carried over: ${e.note}` : "Carried over"
     case "restarted":
       return "Server restarted"
     case "threshold":
@@ -83,13 +87,13 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   )
 }
 
-function Content({ record, now }: { record: SubscriptionRecord; now: string }) {
+function Content({ server, record, now }: { server: ServerInfo; record: SubscriptionRecord; now: string }) {
   const d = derive(record.startedAt, record.endsAt, now, record)
-  const dismiss = useDismissSubscriptionBanner()
-  const saveReminders = useSaveSubscriptionReminders()
-  const saveNotes = useSaveSubscriptionNotes()
-  const exportFile = useExportSubscription()
-  const renew = useRenewSubscription()
+  const dismiss = useDismissSubscriptionBanner(server.serverId)
+  const saveReminders = useSaveSubscriptionReminders(server.serverId)
+  const saveNotes = useSaveSubscriptionNotes(server.serverId)
+  const exportFile = useExportSubscription(server.serverId)
+  const renew = useRenewSubscription(server.serverId)
   const [notes, setNotes] = useState(record.notes)
   const [typedEnd, setTypedEnd] = useState("")
   const endDate = record.endsAt.slice(0, 10)
@@ -106,7 +110,9 @@ function Content({ record, now }: { record: SubscriptionRecord; now: string }) {
         <Alert>
           <BellRing />
           <AlertTitle>{d.banner} day reminder</AlertTitle>
-          <AlertDescription>The subscription ends on {formatUTC(record.endsAt)}.</AlertDescription>
+          <AlertDescription>
+            {server.name}&apos;s subscription ends on {formatUTC(record.endsAt)}.
+          </AlertDescription>
           <AlertAction>
             <Button variant="ghost" size="icon-sm" disabled={dismiss.isPending} onClick={() => dismiss.mutate(d.banner!)}>
               <X className="size-4" />
@@ -154,14 +160,16 @@ function Content({ record, now }: { record: SubscriptionRecord; now: string }) {
               <AlertTitle>Server clock is behind the subscription start</AlertTitle>
             </Alert>
           )}
-          <Row label="Server label" value={record.serverLabel} />
+          <Row label="Server" value={server.name} />
+          <Row label="Organization" value={server.organizationName ?? "-"} />
+          <Row label="Server id" value={<span className="font-mono text-xs">{server.serverId}</span>} />
           <Row label="Record id" value={<span className="font-mono text-xs">{record.id}</span>} />
           <Row label="First connection" value={formatUTC(record.startedAt)} />
           {Object.entries(meta).map(([key, value]) => (
             <Row key={key} label={key} value={Array.isArray(value) ? value.join(", ") || "-" : value == null ? "-" : String(value)} />
           ))}
           <Row label="Connections" value={record.connectionCount} />
-          <Row label="Last connection" value={formatUTC(record.lastConnectionAt)} />
+          <Row label="Last connection" value={`${formatUTC(record.lastConnectionAt)} (${ageLabel(record.lastConnectionAt, now)})`} />
         </CardContent>
       </Card>
 
@@ -234,7 +242,7 @@ function Content({ record, now }: { record: SubscriptionRecord; now: string }) {
       <Card>
         <CardHeader>
           <CardTitle>Export</CardTitle>
-          <CardDescription>This record only.</CardDescription>
+          <CardDescription>This server&apos;s record only.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" disabled={exportFile.isPending} onClick={() => exportFile.mutate("json")}>
@@ -272,11 +280,11 @@ function Content({ record, now }: { record: SubscriptionRecord; now: string }) {
   )
 }
 
-export function SubscriptionPage() {
+export function SubscriptionServerPage({ serverId }: { serverId: string }) {
   const { user } = useAuth()
   const isSuperAdmin = user?.role === "SUPER_ADMIN"
-  const { data, isLoading, isError, refetch } = useSubscription(isSuperAdmin)
-  const { data: clock } = useSubscriptionClock(isSuperAdmin && !!data?.record)
+  const { data, isLoading, isError, refetch } = useServerSubscription(serverId, isSuperAdmin)
+  const { data: clock } = useServerSubscriptionClock(serverId, isSuperAdmin && !!data?.record)
   const record = data?.record ?? null
   const endsAtChanged = !!record && !!clock?.endsAt && clock.endsAt !== record.endsAt
 
@@ -287,10 +295,23 @@ export function SubscriptionPage() {
   if (!isSuperAdmin) return null
 
   const live = record && clock?.endsAt === record.endsAt ? clock.now : data?.now
+  const server = data?.server ?? null
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Subscription" description="The 12-month term for this server, from its first venue connection." />
+      <div>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="mb-2 -ml-2 text-muted-foreground"
+          render={
+            <Link href="/subscription">
+              <ArrowLeft className="size-4" /> Subscription
+            </Link>
+          }
+        />
+        <PageHeader title={server?.name ?? "Subscription"} description={server?.organizationName ?? undefined} />
+      </div>
       {isLoading ? (
         <div className="space-y-3">
           {Array.from({ length: 4 }).map((_, i) => (
@@ -298,11 +319,11 @@ export function SubscriptionPage() {
           ))}
         </div>
       ) : isError && !data ? (
-        <EmptyState icon={CalendarClock} title="Could not load the subscription" description="Try again in a moment." />
-      ) : !record || !live ? (
-        <EmptyState icon={CalendarClock} title="No subscription yet" description="It starts on the first venue connection." />
+        <EmptyState icon={CalendarClock} title="Server not found" description="It may have been removed, or the subscription data is unavailable." />
+      ) : !server ? null : !record || !live ? (
+        <EmptyState icon={CalendarClock} title="Not started" description="This server's 12-month term starts on its first venue connection." />
       ) : (
-        <Content record={record} now={live} />
+        <Content server={server} record={record} now={live} />
       )}
     </div>
   )

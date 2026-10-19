@@ -1,6 +1,9 @@
 import crypto from "node:crypto"
+import type { Prisma } from "@prisma/client"
 import { prisma } from "../lib/db.js"
 import { env } from "../lib/env.js"
+
+export const FIXTURE_PREFIX = "zz"
 
 export interface Term {
   index: number
@@ -19,8 +22,8 @@ export interface SubscriptionEvent {
 }
 
 export interface SubscriptionRecord {
+  serverId: string
   id: string
-  serverLabel: string
   startedAt: string
   endsAt: string
   status: string
@@ -32,6 +35,14 @@ export interface SubscriptionRecord {
   dismissed: { term: number; threshold: number; at: string }[]
   connectionCount: number
   lastConnectionAt: string
+}
+
+export interface ServerInfo {
+  serverId: string
+  name: string
+  organizationId: string
+  organizationName: string | null
+  serverStatus: string
 }
 
 export interface ConnectionMeta {
@@ -49,7 +60,10 @@ export interface Actor {
   email: string
 }
 
-const TABLE = "subscription.record"
+const TABLE = "subscription.server_record"
+const LEGACY_TABLE = "subscription.record"
+const CARRIED_OVER_NOTE = "This connection count and last connection were fleet-wide before the per-server change."
+
 const ISO_FORMAT = `'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'`
 const iso = (expr: string) => `to_char((${expr}) AT TIME ZONE 'UTC', ${ISO_FORMAT})`
 const plus12Months = (expr: string) => `(((${expr}) AT TIME ZONE 'UTC') + interval '12 months') AT TIME ZONE 'UTC'`
@@ -77,9 +91,8 @@ const event = (type: string, nowParam: string, extra = "") =>
 const ENSURE_SQL = [
   `CREATE SCHEMA IF NOT EXISTS subscription`,
   `CREATE TABLE IF NOT EXISTS ${TABLE} (
-    singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+    server_id text PRIMARY KEY,
     id text NOT NULL,
-    server_label text NOT NULL,
     started_at timestamptz NOT NULL,
     ends_at timestamptz NOT NULL,
     status text NOT NULL DEFAULT 'active',
@@ -94,11 +107,32 @@ const ENSURE_SQL = [
   )`,
 ]
 
+const LEGACY_EXISTS_SQL = `SELECT to_regclass('${LEGACY_TABLE}') IS NOT NULL AS present`
+
+const COPY_LEGACY_SQL = `INSERT INTO ${TABLE} (
+    server_id, id, started_at, ends_at, status, created_by_connection, terms, events,
+    notes, reminder_days, dismissed, connection_count, last_connection_at
+  )
+  SELECT
+    l.created_by_connection->>'serverId', l.id, l.started_at, l.ends_at, l.status, l.created_by_connection, l.terms,
+    l.events || jsonb_build_array(jsonb_build_object(
+      'id', gen_random_uuid()::text,
+      'type', 'carried_over',
+      'at', ${iso("$1::timestamptz")},
+      'term', jsonb_array_length(l.terms),
+      'note', $2::text
+    )),
+    l.notes, l.reminder_days, l.dismissed, l.connection_count, l.last_connection_at
+  FROM ${LEGACY_TABLE} AS l
+  WHERE COALESCE(l.created_by_connection->>'serverId', '') <> ''
+  ON CONFLICT (server_id) DO NOTHING
+  RETURNING server_id`
+
 const CONNECTION_SQL = `INSERT INTO ${TABLE} AS r (
-    singleton, id, server_label, started_at, ends_at, status, created_by_connection,
+    server_id, id, started_at, ends_at, status, created_by_connection,
     terms, events, notes, reminder_days, dismissed, connection_count, last_connection_at
   ) VALUES (
-    true, $1, $2, $3::timestamptz, ${plus12Months("$3::timestamptz")}, 'active', $4::jsonb,
+    $1, $2, $3::timestamptz, ${plus12Months("$3::timestamptz")}, 'active', $4::jsonb,
     jsonb_build_array(jsonb_build_object(
       'index', 1,
       'startedAt', ${iso("$3::timestamptz")},
@@ -109,7 +143,7 @@ const CONNECTION_SQL = `INSERT INTO ${TABLE} AS r (
     jsonb_build_array(jsonb_build_object('id', gen_random_uuid()::text, 'type', 'created', 'at', ${iso("$3::timestamptz")}, 'term', 1)),
     '', '[90, 30, 7, 1]'::jsonb, '[]'::jsonb, 1, $3::timestamptz
   )
-  ON CONFLICT (singleton) DO UPDATE SET
+  ON CONFLICT (server_id) DO UPDATE SET
     connection_count = r.connection_count + 1,
     last_connection_at = EXCLUDED.last_connection_at,
     events = r.events || ${thresholdEvents("$3")}
@@ -117,36 +151,35 @@ const CONNECTION_SQL = `INSERT INTO ${TABLE} AS r (
 
 const RESTART_SQL = `UPDATE ${TABLE} AS r SET
     events = r.events || ${event("restarted", "$1")} || ${thresholdEvents("$1")}
-  WHERE r.singleton
-  RETURNING r.id`
+  RETURNING r.server_id`
 
 const NOTES_SQL = `UPDATE ${TABLE} AS r SET
-    notes = $1,
-    events = r.events || ${event("note_saved", "$2", `, 'by', $3::jsonb`)}
-  WHERE r.singleton
+    notes = $2,
+    events = r.events || ${event("note_saved", "$3", `, 'by', $4::jsonb`)}
+  WHERE r.server_id = $1
   RETURNING r.*`
 
 const REMINDERS_SQL = `UPDATE ${TABLE} AS r SET
-    reminder_days = $1::jsonb,
-    events = r.events || ${event("reminders_saved", "$2", `, 'by', $3::jsonb, 'reminderDays', $1::jsonb`)}
-  WHERE r.singleton
+    reminder_days = $2::jsonb,
+    events = r.events || ${event("reminders_saved", "$3", `, 'by', $4::jsonb, 'reminderDays', $2::jsonb`)}
+  WHERE r.server_id = $1
   RETURNING r.*`
 
 const DISMISS_SQL = `UPDATE ${TABLE} AS r SET
-    dismissed = r.dismissed || jsonb_build_array(jsonb_build_object('term', jsonb_array_length(r.terms), 'threshold', $1::int, 'at', ${iso("$2::timestamptz")}))
-  WHERE r.singleton
+    dismissed = r.dismissed || jsonb_build_array(jsonb_build_object('term', jsonb_array_length(r.terms), 'threshold', $2::int, 'at', ${iso("$3::timestamptz")}))
+  WHERE r.server_id = $1
     AND NOT EXISTS (
       SELECT 1 FROM jsonb_array_elements(r.dismissed) AS d
-      WHERE (d->>'term')::int = jsonb_array_length(r.terms) AND (d->>'threshold')::int = $1::int
+      WHERE (d->>'term')::int = jsonb_array_length(r.terms) AND (d->>'threshold')::int = $2::int
     )
   RETURNING r.*`
 
 const EXPORT_SQL = `UPDATE ${TABLE} AS r SET
-    events = r.events || ${event("exported", "$1", `, 'by', $2::jsonb, 'format', $3::text`)}
-  WHERE r.singleton
+    events = r.events || ${event("exported", "$2", `, 'by', $3::jsonb, 'format', $4::text`)}
+  WHERE r.server_id = $1
   RETURNING r.*`
 
-const newStart = `CASE WHEN r.ends_at > $1::timestamptz THEN r.ends_at ELSE $1::timestamptz END`
+const newStart = `CASE WHEN r.ends_at > $2::timestamptz THEN r.ends_at ELSE $2::timestamptz END`
 
 const RENEW_SQL = `UPDATE ${TABLE} AS r SET
     ends_at = ${plus12Months(newStart)},
@@ -155,22 +188,23 @@ const RENEW_SQL = `UPDATE ${TABLE} AS r SET
       'startedAt', ${iso(newStart)},
       'endsAt', ${iso(plus12Months(newStart))},
       'reason', 'renewal',
-      'confirmedBy', jsonb_build_object('type', 'user', 'userId', $2::jsonb->>'userId', 'email', $2::jsonb->>'email')
+      'confirmedBy', jsonb_build_object('type', 'user', 'userId', $3::jsonb->>'userId', 'email', $3::jsonb->>'email')
     )),
     events = r.events || jsonb_build_array(jsonb_build_object(
       'id', gen_random_uuid()::text,
       'type', 'renewal_confirmed',
-      'at', ${iso("$1::timestamptz")},
+      'at', ${iso("$2::timestamptz")},
       'term', jsonb_array_length(r.terms) + 1,
-      'by', $2::jsonb,
+      'by', $3::jsonb,
       'previousEndsAt', ${iso("r.ends_at")},
       'endsAt', ${iso(plus12Months(newStart))}
     ))
-  WHERE r.singleton AND to_char(r.ends_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') = $3
+  WHERE r.server_id = $1 AND to_char(r.ends_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') = $4
   RETURNING r.*`
 
-const READ_SQL = `SELECT * FROM ${TABLE} WHERE singleton`
-const CLOCK_SQL = `SELECT ends_at FROM ${TABLE} WHERE singleton`
+const READ_ONE_SQL = `SELECT * FROM ${TABLE} WHERE server_id = $1`
+const READ_ALL_SQL = `SELECT * FROM ${TABLE}`
+const CLOCK_SQL = `SELECT ends_at FROM ${TABLE} WHERE server_id = $1`
 
 const MAX_PENDING = 200
 let pending = 0
@@ -195,6 +229,23 @@ async function write<T = unknown>(sql: string, ...params: unknown[]): Promise<T[
   return results[2] as T[]
 }
 
+async function readOnly<T>(query: Prisma.PrismaPromise<T>): Promise<T> {
+  const results = await prisma.$transaction([
+    prisma.$executeRawUnsafe(`SET TRANSACTION READ ONLY`),
+    prisma.$executeRawUnsafe(`SET LOCAL lock_timeout = '1s'`),
+    prisma.$executeRawUnsafe(`SET LOCAL statement_timeout = '2s'`),
+    query,
+  ])
+  return results[3] as T
+}
+
+export async function copyLegacyRecord(at: Date): Promise<string[]> {
+  const present = await readOnly(prisma.$queryRawUnsafe<{ present: boolean }[]>(LEGACY_EXISTS_SQL))
+  if (!present[0]?.present) return []
+  const rows = await write<{ server_id: string }>(COPY_LEGACY_SQL, at.toISOString(), CARRIED_OVER_NOTE)
+  return rows.map((r) => r.server_id)
+}
+
 let ensured: Promise<void> | null = null
 
 export function ensureTable(): Promise<void> {
@@ -205,6 +256,7 @@ export function ensureTable(): Promise<void> {
         prisma.$executeRawUnsafe(`SET LOCAL statement_timeout = '5s'`),
         ...ENSURE_SQL.map((sql) => prisma.$executeRawUnsafe(sql)),
       ])
+      await copyLegacyRecord(new Date())
     }).catch((err) => {
       ensured = null
       throw err
@@ -218,7 +270,7 @@ export function isMissingTable(err: unknown): boolean {
   return e?.meta?.code === "42P01" || e?.code === "42P01" || /relation .* does not exist/i.test(e?.message ?? "")
 }
 
-export function serverLabel(): string {
+export function cloudLabel(): string {
   try {
     return new URL(env.publicApiUrl).hostname
   } catch {
@@ -227,8 +279,8 @@ export function serverLabel(): string {
 }
 
 interface Row {
+  server_id: string
   id: string
-  server_label: string
   started_at: Date
   ends_at: Date
   status: string
@@ -244,8 +296,8 @@ interface Row {
 
 function toRecord(row: Row): SubscriptionRecord {
   return {
+    serverId: row.server_id,
     id: row.id,
-    serverLabel: row.server_label,
     startedAt: row.started_at.toISOString(),
     endsAt: row.ends_at.toISOString(),
     status: row.status,
@@ -264,34 +316,76 @@ export async function recordConnection(meta: ConnectionMeta, at: Date): Promise<
   await ensureTable()
   const metadata = { ...meta, at: at.toISOString() }
   const rows = await serial(() =>
-    write<{ inserted: boolean }>(CONNECTION_SQL, crypto.randomUUID(), serverLabel(), at.toISOString(), JSON.stringify(metadata))
+    write<{ inserted: boolean }>(CONNECTION_SQL, meta.serverId, crypto.randomUUID(), at.toISOString(), JSON.stringify(metadata))
   )
   return { inserted: rows[0]?.inserted === true }
 }
 
-export async function appendRestart(at: Date): Promise<boolean> {
+export async function appendRestart(at: Date): Promise<number> {
   await ensureTable()
-  const rows = await serial(() => write<{ id: string }>(RESTART_SQL, at.toISOString()))
-  return rows.length > 0
+  const rows = await serial(() => write<{ server_id: string }>(RESTART_SQL, at.toISOString()))
+  return rows.length
 }
 
-export async function readRecord(): Promise<SubscriptionRecord | null> {
+async function readRows(sql: string, ...params: unknown[]): Promise<Row[]> {
   try {
-    const rows = await prisma.$queryRawUnsafe<Row[]>(READ_SQL)
-    return rows[0] ? toRecord(rows[0]) : null
+    return await readOnly(prisma.$queryRawUnsafe<Row[]>(sql, ...params))
+  } catch (err) {
+    if (isMissingTable(err)) return []
+    throw err
+  }
+}
+
+export async function readRecord(serverId: string): Promise<SubscriptionRecord | null> {
+  const rows = await readRows(READ_ONE_SQL, serverId)
+  return rows[0] ? toRecord(rows[0]) : null
+}
+
+export async function readAllRecords(): Promise<SubscriptionRecord[]> {
+  return (await readRows(READ_ALL_SQL)).map(toRecord)
+}
+
+export async function readEndsAt(serverId: string): Promise<string | null> {
+  try {
+    const rows = await readOnly(prisma.$queryRawUnsafe<{ ends_at: Date }[]>(CLOCK_SQL, serverId))
+    return rows[0] ? rows[0].ends_at.toISOString() : null
   } catch (err) {
     if (isMissingTable(err)) return null
     throw err
   }
 }
 
-export async function readEndsAt(): Promise<string | null> {
-  try {
-    const rows = await prisma.$queryRawUnsafe<{ ends_at: Date }[]>(CLOCK_SQL)
-    return rows[0] ? rows[0].ends_at.toISOString() : null
-  } catch (err) {
-    if (isMissingTable(err)) return null
-    throw err
+const notFixture = { NOT: [{ id: { startsWith: FIXTURE_PREFIX } }, { organizationId: { startsWith: FIXTURE_PREFIX } }] }
+const serverSelect = { id: true, name: true, organizationId: true, status: true } as const
+
+async function organizationNames(): Promise<Map<string, string>> {
+  const orgs = await readOnly(prisma.organization.findMany({ select: { id: true, name: true } }))
+  return new Map(orgs.map((o) => [o.id, o.name]))
+}
+
+export async function listServers(): Promise<ServerInfo[]> {
+  const servers = await readOnly(prisma.musicServer.findMany({ where: notFixture, select: serverSelect }))
+  const names = await organizationNames()
+  return servers.map((s) => ({
+    serverId: s.id,
+    name: s.name,
+    organizationId: s.organizationId,
+    organizationName: names.get(s.organizationId) ?? null,
+    serverStatus: s.status,
+  }))
+}
+
+export async function readServer(serverId: string): Promise<ServerInfo | null> {
+  if (serverId.startsWith(FIXTURE_PREFIX)) return null
+  const server = await readOnly(prisma.musicServer.findFirst({ where: { AND: [{ id: serverId }, notFixture] }, select: serverSelect }))
+  if (!server) return null
+  const names = await organizationNames()
+  return {
+    serverId: server.id,
+    name: server.name,
+    organizationId: server.organizationId,
+    organizationName: names.get(server.organizationId) ?? null,
+    serverStatus: server.status,
   }
 }
 
@@ -305,22 +399,22 @@ async function update(sql: string, ...params: unknown[]): Promise<SubscriptionRe
   }
 }
 
-export function saveNotes(notes: string, actor: Actor, at: Date) {
-  return update(NOTES_SQL, notes, at.toISOString(), JSON.stringify(actor))
+export function saveNotes(serverId: string, notes: string, actor: Actor, at: Date) {
+  return update(NOTES_SQL, serverId, notes, at.toISOString(), JSON.stringify(actor))
 }
 
-export function saveReminders(reminderDays: number[], actor: Actor, at: Date) {
-  return update(REMINDERS_SQL, JSON.stringify(reminderDays), at.toISOString(), JSON.stringify(actor))
+export function saveReminders(serverId: string, reminderDays: number[], actor: Actor, at: Date) {
+  return update(REMINDERS_SQL, serverId, JSON.stringify(reminderDays), at.toISOString(), JSON.stringify(actor))
 }
 
-export function dismissBanner(threshold: number, at: Date) {
-  return update(DISMISS_SQL, threshold, at.toISOString())
+export function dismissBanner(serverId: string, threshold: number, at: Date) {
+  return update(DISMISS_SQL, serverId, threshold, at.toISOString())
 }
 
-export function appendExport(format: "json" | "text", actor: Actor, at: Date) {
-  return update(EXPORT_SQL, at.toISOString(), JSON.stringify(actor), format)
+export function appendExport(serverId: string, format: "json" | "text", actor: Actor, at: Date) {
+  return update(EXPORT_SQL, serverId, at.toISOString(), JSON.stringify(actor), format)
 }
 
-export function renew(confirmEndDate: string, actor: Actor, at: Date) {
-  return update(RENEW_SQL, at.toISOString(), JSON.stringify(actor), confirmEndDate)
+export function renew(serverId: string, confirmEndDate: string, actor: Actor, at: Date) {
+  return update(RENEW_SQL, serverId, at.toISOString(), JSON.stringify(actor), confirmEndDate)
 }

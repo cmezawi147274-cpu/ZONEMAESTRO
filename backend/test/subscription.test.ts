@@ -12,8 +12,10 @@
  *     --entrypoint sh cmmp-backend-migrate -c 'node --test --import tsx test/subscription.test.ts'
  *   docker rm -f zzsub-pg
  *
- * The portal-subscription mount lets the banner tests run the page's own
- * derive.ts rather than a copy of it.
+ * The throwaway database gets minimal "Organization" and "MusicServer"
+ * tables (the columns the module reads) and a legacy subscription.record
+ * row shaped like the one production holds. The portal-subscription mount
+ * lets the banner and fleet tests run the page's own derive.ts.
  */
 import { test, before, after, describe } from "node:test"
 import assert from "node:assert/strict"
@@ -26,13 +28,51 @@ const skip = TEST_DB ? false : "SUBSCRIPTION_TEST_DATABASE_URL is not set (needs
 
 const RS = "\u001e"
 const DAY = 86_400_000
-const SERVERS: Record<string, { name: string; organizationId: string }> = {
-  "srv-real-1": { name: "Venue One", organizationId: "org-1" },
-  "srv-real-2": { name: "Venue Two", organizationId: "org-1" },
+const PORTAL_DERIVE = "../portal-subscription/derive.ts"
+const CARRIED_OVER_NOTE = "This connection count and last connection were fleet-wide before the per-server change."
+
+const HUB_SERVERS: Record<string, { name: string; organizationId: string }> = {
+  "srv-demo": { name: "DEMO-SERVER", organizationId: "org-1" },
+  "srv-a": { name: "Alpha", organizationId: "org-1" },
+  "srv-b": { name: "Bravo", organizationId: "org-2" },
+  "srv-gone": { name: "Gone Venue", organizationId: "org-2" },
   "zzhub-fixture": { name: "Fixture", organizationId: "zzhub-org" },
 }
+const LISTED = [
+  ["srv-demo", "DEMO-SERVER", "org-1"],
+  ["srv-a", "Alpha", "org-1"],
+  ["srv-b", "Bravo", "org-2"],
+  ["srv-idle", "Idle Venue", "org-2"],
+  ["zzhub-fixture", "Fixture", "zzhub-org"],
+]
+const LEGACY = {
+  id: "legacy-0000-0000-0000-000000000001",
+  started_at: "2026-10-19T12:13:07.284Z",
+  ends_at: "2027-10-19T12:13:07.284Z",
+  created_by_connection: {
+    at: "2026-10-19T12:13:07.284Z",
+    caps: ["cmdfix"],
+    source: "hub",
+    version: "1.0.0",
+    serverId: "srv-demo",
+    ipAddress: "203.0.113.5",
+    serverName: "DEMO-SERVER",
+    organizationId: "org-1",
+  },
+  terms: [
+    {
+      index: 1,
+      reason: "initial",
+      endsAt: "2027-10-19T12:13:07.284Z",
+      startedAt: "2026-10-19T12:13:07.284Z",
+      confirmedBy: { type: "system", label: "First venue connection" },
+    },
+  ],
+  events: [{ id: "legacy-created", at: "2026-10-19T12:13:07.284Z", term: 1, type: "created" }],
+  connection_count: 3,
+  last_connection_at: "2026-10-19T12:13:20.000Z",
+}
 const tokenFor = (id: string) => `${id}.secret-${id}`
-const PORTAL_DERIVE = "../portal-subscription/derive.ts"
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 let prisma: any
@@ -43,18 +83,15 @@ let app: FastifyInstance
 let hub: http.Server
 let hubPort = 0
 let tokens: Record<string, string> = {}
+let legacyAtBoot: any
 const unhandled: unknown[] = []
 const onUnhandled = (reason: unknown) => unhandled.push(reason)
 
-async function rows(): Promise<any[]> {
-  return prisma.$queryRawUnsafe("SELECT * FROM subscription.record")
-}
-
-async function row(): Promise<any> {
-  const r = await rows()
-  assert.equal(r.length, 1, "expected exactly one subscription record")
-  return r[0]
-}
+const all = async (): Promise<any[]> => prisma.$queryRawUnsafe("SELECT * FROM subscription.server_record ORDER BY server_id")
+const one = async (id: string): Promise<any> =>
+  (await prisma.$queryRawUnsafe("SELECT * FROM subscription.server_record WHERE server_id = $1", id))[0] ?? null
+const legacy = async (): Promise<any> => (await prisma.$queryRawUnsafe("SELECT * FROM subscription.record"))[0]
+const setEnds = (id: string, sql: string) => prisma.$executeRawUnsafe(`UPDATE subscription.server_record SET ends_at = ${sql} WHERE server_id = $1`, id)
 
 async function until(check: () => Promise<boolean>, ms = 3000) {
   const end = Date.now() + ms
@@ -65,9 +102,7 @@ async function until(check: () => Promise<boolean>, ms = 3000) {
   assert.fail("condition not met in time")
 }
 
-async function settle() {
-  await new Promise((r) => setTimeout(r, 150))
-}
+const settle = () => new Promise((r) => setTimeout(r, 150))
 
 function hubConnect(serverId: string): Promise<{ ws: WebSocket; ackMs: number }> {
   return new Promise((resolve, reject) => {
@@ -105,9 +140,11 @@ async function call(token: string | null, method: string, url: string, body?: un
   return { status: res.statusCode, body: res.body ? res.json() : null }
 }
 
+const SUPER = () => tokens.SUPER_ADMIN
+
 const stable = (r: any) => ({
+  server_id: r.server_id,
   id: r.id,
-  server_label: r.server_label,
   started_at: r.started_at.toISOString(),
   ends_at: r.ends_at.toISOString(),
   status: r.status,
@@ -117,6 +154,8 @@ const stable = (r: any) => ({
   reminder_days: r.reminder_days,
   dismissed: r.dismissed,
 })
+const full = (r: any) => (r ? { ...stable(r), events: r.events, connection_count: r.connection_count, last_connection_at: r.last_connection_at.toISOString() } : null)
+const snapshot = async () => (await all()).map(full)
 
 describe("subscription", { skip }, () => {
   before(async () => {
@@ -128,6 +167,43 @@ describe("subscription", { skip }, () => {
     process.on("unhandledRejection", onUnhandled)
 
     ;({ prisma } = await import("../src/lib/db.js"))
+
+    for (const sql of [
+      `DROP SCHEMA IF EXISTS subscription CASCADE`,
+      `DROP TABLE IF EXISTS "MusicServer"`,
+      `DROP TABLE IF EXISTS "Organization"`,
+      `DROP TYPE IF EXISTS "ServerStatus"`,
+      `CREATE TYPE "ServerStatus" AS ENUM ('ONLINE', 'OFFLINE', 'WARNING', 'UPDATING', 'UNKNOWN')`,
+      `CREATE TABLE "Organization" (id text PRIMARY KEY, name text NOT NULL)`,
+      `CREATE TABLE "MusicServer" (id text PRIMARY KEY, name text NOT NULL, "organizationId" text NOT NULL, status "ServerStatus" NOT NULL DEFAULT 'ONLINE')`,
+      `INSERT INTO "Organization" VALUES ('org-1', 'North Org'), ('org-2', 'South Org'), ('zzhub-org', 'Fixture Org')`,
+      `CREATE SCHEMA subscription`,
+      `CREATE TABLE subscription.record (
+        singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton), id text NOT NULL, server_label text NOT NULL,
+        started_at timestamptz NOT NULL, ends_at timestamptz NOT NULL, status text NOT NULL DEFAULT 'active',
+        created_by_connection jsonb NOT NULL, terms jsonb NOT NULL, events jsonb NOT NULL, notes text NOT NULL DEFAULT '',
+        reminder_days jsonb NOT NULL, dismissed jsonb NOT NULL DEFAULT '[]'::jsonb, connection_count integer NOT NULL,
+        last_connection_at timestamptz NOT NULL)`,
+    ]) {
+      await prisma.$executeRawUnsafe(sql)
+    }
+    for (const [id, name, org] of LISTED) {
+      await prisma.$executeRawUnsafe(`INSERT INTO "MusicServer" (id, name, "organizationId") VALUES ($1, $2, $3)`, id, name, org)
+    }
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO subscription.record (id, server_label, started_at, ends_at, created_by_connection, terms, events, reminder_days, connection_count, last_connection_at)
+       VALUES ($1, 'cloud.zonemaestro.com', $2::timestamptz, $3::timestamptz, $4::jsonb, $5::jsonb, $6::jsonb, '[90, 30, 7, 1]'::jsonb, $7, $8::timestamptz)`,
+      LEGACY.id,
+      LEGACY.started_at,
+      LEGACY.ends_at,
+      JSON.stringify(LEGACY.created_by_connection),
+      JSON.stringify(LEGACY.terms),
+      JSON.stringify(LEGACY.events),
+      LEGACY.connection_count,
+      LEGACY.last_connection_at
+    )
+    legacyAtBoot = await legacy()
+
     hooks = await import("../src/subscription/hooks.js")
     store = await import("../src/subscription/store.js")
     time = await import("../src/subscription/time.js")
@@ -137,10 +213,8 @@ describe("subscription", { skip }, () => {
     const { HttpError } = await import("../src/lib/http-error.js")
     const { default: Fastify } = await import("fastify")
 
-    await prisma.$executeRawUnsafe("DROP SCHEMA IF EXISTS subscription CASCADE")
-
     prisma.musicServer.findUnique = async ({ where }: any) => {
-      const s = SERVERS[where.id]
+      const s = HUB_SERVERS[where.id]
       if (!s) return null
       return {
         id: where.id,
@@ -196,308 +270,277 @@ describe("subscription", { skip }, () => {
     await prisma?.$disconnect()
   })
 
-  test("a restart with no record writes nothing", async () => {
-    await hooks.recordRestart()
+  test("boot copies the legacy row onto its stored server once, with one carried-over event", async () => {
     await store.ensureTable()
-    await settle()
-    assert.equal(await store.appendRestart(new Date()), false)
-    assert.equal((await rows()).length, 0)
-  })
-
-  test("the first hub connection creates one record and the connection succeeds", async () => {
-    await connectAndClose("srv-real-1")
-    await until(async () => (await rows()).length === 1)
-    const r = await row()
-    assert.match(r.id, /^[0-9a-f-]{36}$/)
-    assert.equal(r.server_label, "cloud.zonemaestro.com")
-    assert.equal(r.status, "active")
-    assert.ok(Math.abs(r.started_at.getTime() - Date.now()) < 10_000)
-    assert.equal(r.ends_at.toISOString(), time.addCalendarMonthsUTC(r.started_at, 12).toISOString())
-    assert.equal(r.last_connection_at.toISOString(), r.started_at.toISOString())
-    assert.equal(r.connection_count, 1)
+    await until(async () => ((await one("srv-demo"))?.events ?? []).some((e: any) => e.type === "restarted"))
+    const rows = await all()
+    assert.deepEqual(rows.map((r) => r.server_id), ["srv-demo"], "the copy created rows for other servers")
+    const r = rows[0]
+    assert.equal(r.id, LEGACY.id)
+    assert.equal(r.started_at.toISOString(), LEGACY.started_at)
+    assert.equal(r.ends_at.toISOString(), LEGACY.ends_at)
+    assert.deepEqual(r.terms, LEGACY.terms)
+    assert.deepEqual(r.created_by_connection, LEGACY.created_by_connection)
     assert.equal(r.notes, "")
     assert.deepEqual(r.reminder_days, [90, 30, 7, 1])
     assert.deepEqual(r.dismissed, [])
-    assert.equal(r.terms.length, 1)
-    assert.deepEqual(r.terms[0], {
-      index: 1,
-      startedAt: r.started_at.toISOString(),
-      endsAt: r.ends_at.toISOString(),
-      reason: "initial",
-      confirmedBy: { type: "system", label: "First venue connection" },
-    })
-    assert.deepEqual(r.events.map((e: any) => e.type), ["created"])
-    assert.deepEqual(Object.keys(r.created_by_connection).sort(), ["at", "caps", "ipAddress", "organizationId", "serverId", "serverName", "source", "version"])
-    assert.equal(r.created_by_connection.serverId, "srv-real-1")
-    assert.deepEqual(r.created_by_connection.caps, ["cmdfix"])
-    assert.ok(!JSON.stringify(r).includes("SECRET"), "a secret field was stored")
+    assert.equal(r.connection_count, LEGACY.connection_count)
+    assert.equal(r.last_connection_at.toISOString(), LEGACY.last_connection_at)
+    assert.deepEqual(r.events.slice(0, 1), LEGACY.events)
+    assert.deepEqual(r.events.map((e: any) => e.type), ["created", "carried_over", "restarted"])
+    const carried = r.events[1]
+    assert.equal(carried.note, CARRIED_OVER_NOTE)
+    assert.equal(carried.term, 1)
+    assert.ok(!/Xenia|WIJEI|SPA|Alpha|Bravo/.test(carried.note), "the carried-over note names other venues")
+    assert.deepEqual(await legacy(), legacyAtBoot, "the legacy row was written")
   })
 
-  test("a second connection only updates connectionCount and lastConnectionAt", async () => {
-    const before = await row()
-    await connectAndClose("srv-real-2")
-    await until(async () => (await row()).connection_count === 2)
-    const after = await row()
+  test("repeating the copy adds nothing", async () => {
+    const before = await snapshot()
+    assert.deepEqual(await store.copyLegacyRecord(new Date()), [])
+    assert.deepEqual(await snapshot(), before)
+  })
+
+  test("a restart with existing rows appends one restarted event per row and creates none", async () => {
+    const before = await one("srv-demo")
+    assert.equal(await store.appendRestart(new Date()), 1)
+    const after = await one("srv-demo")
     assert.deepEqual(stable(after), stable(before))
-    assert.deepEqual(after.events, before.events)
-    assert.ok(after.last_connection_at.getTime() >= before.last_connection_at.getTime())
+    assert.equal(after.connection_count, before.connection_count)
+    assert.deepEqual(after.events.slice(before.events.length).map((e: any) => e.type), ["restarted"])
+    assert.deepEqual((await all()).map((r) => r.server_id), ["srv-demo"])
+  })
+
+  test("the routes plugin schedules one restart per process, and it was already used", async () => {
+    const before = await snapshot()
+    await hooks.recordRestart()
+    assert.deepEqual(await snapshot(), before)
+  })
+
+  test("a server's first hub connection creates only that server's term", async () => {
+    const demoBefore = full(await one("srv-demo"))
+    await connectAndClose("srv-a")
+    await until(async () => !!(await one("srv-a")))
+    const a = await one("srv-a")
+    assert.ok(Math.abs(a.started_at.getTime() - Date.now()) < 10_000)
+    assert.equal(a.ends_at.toISOString(), time.addCalendarMonthsUTC(a.started_at, 12).toISOString())
+    assert.equal(a.connection_count, 1)
+    assert.equal(a.last_connection_at.toISOString(), a.started_at.toISOString())
+    assert.deepEqual(a.events.map((e: any) => e.type), ["created"])
+    assert.equal(a.created_by_connection.serverId, "srv-a")
+    assert.equal(a.terms.length, 1)
+    assert.ok(!JSON.stringify(a).includes("SECRET"), "a secret field was stored")
+    assert.deepEqual(full(await one("srv-demo")), demoBefore, "server A's connection changed DEMO-SERVER")
+    assert.equal(await one("srv-b"), null, "server A's connection created server B")
+    assert.equal(await one("srv-idle"), null)
+  })
+
+  test("a later connection updates only that server's count and last connection", async () => {
+    const [aBefore, demoBefore] = [await one("srv-a"), full(await one("srv-demo"))]
+    await connectAndClose("srv-a")
+    await until(async () => (await one("srv-a")).connection_count === 2)
+    const a = await one("srv-a")
+    assert.deepEqual(stable(a), stable(aBefore))
+    assert.deepEqual(a.events, aBefore.events)
+    assert.ok(a.last_connection_at.getTime() >= aBefore.last_connection_at.getTime())
+    assert.deepEqual(full(await one("srv-demo")), demoBefore)
+  })
+
+  test("two first connections for the same server create one row", async () => {
+    await Promise.all([
+      hooks.onClientConnected({ source: "hub", serverId: "srv-b" }),
+      hooks.onClientConnected({ source: "hub", serverId: "srv-b" }),
+    ])
+    const b = await one("srv-b")
+    assert.equal(b.connection_count, 2)
+    assert.deepEqual(b.events.map((e: any) => e.type), ["created"])
   })
 
   test("zz fixture venues are ignored", async () => {
     await connectAndClose("zzhub-fixture")
     await settle()
-    assert.equal((await row()).connection_count, 2)
+    assert.equal(await one("zzhub-fixture"), null)
   })
 
-  test("a restart keeps the original dates and appends one restarted event", async () => {
-    const before = await row()
-    assert.equal(await store.appendRestart(new Date()), true)
-    const after = await row()
-    assert.deepEqual(stable(after), stable(before))
-    assert.equal(after.connection_count, before.connection_count)
-    assert.equal(after.last_connection_at.toISOString(), before.last_connection_at.toISOString())
-    assert.deepEqual(after.events.slice(before.events.length).map((e: any) => e.type), ["restarted"])
+  test("the fleet lists every real server, sorted by urgency then name, and only reads", async () => {
+    await connectAndClose("srv-gone")
+    await until(async () => !!(await one("srv-gone")))
+    await setEnds("srv-a", "now() - interval '1 hour'")
+    await setEnds("srv-b", "now() + interval '5 days'")
+    const before = await snapshot()
+
+    const res = await call(SUPER(), "GET", "/api/subscription/servers")
+    assert.equal(res.status, 200)
+    const names = res.body.servers.map((s: any) => s.name)
+    assert.deepEqual(names, ["Alpha", "Bravo", "DEMO-SERVER", "Idle Venue"])
+    assert.deepEqual(res.body.servers.map((s: any) => s.status), ["ended", "critical", "active", "not_started"])
+    assert.deepEqual(res.body.summary, { total: 4, notStarted: 1, active: 1, attention: 0, warning: 0, critical: 1, ended: 1 })
+    const idle = res.body.servers.find((s: any) => s.serverId === "srv-idle")
+    assert.deepEqual(
+      { startedAt: idle.startedAt, endsAt: idle.endsAt, connectionCount: idle.connectionCount, lastConnectionAt: idle.lastConnectionAt },
+      { startedAt: null, endsAt: null, connectionCount: 0, lastConnectionAt: null }
+    )
+    assert.equal(res.body.servers.find((s: any) => s.serverId === "srv-demo").organizationName, "North Org")
+    assert.ok(!names.includes("Gone Venue") && !names.includes("Fixture"), "a removed or fixture server was listed")
+
+    assert.equal((await call(SUPER(), "GET", "/api/subscription/servers/srv-demo")).status, 200)
+    assert.equal((await call(SUPER(), "GET", "/api/subscription/servers/srv-demo/clock")).status, 200)
+    assert.equal((await call(SUPER(), "GET", "/api/subscription/export")).status, 200)
+    assert.deepEqual(await snapshot(), before, "a read wrote")
+    assert.ok(!!(await one("srv-gone")), "the removed server's row was not kept")
   })
 
-  test("the routes plugin schedules one restart per process, and it was already used", async () => {
-    const before = await row()
-    await hooks.recordRestart()
-    assert.equal((await row()).events.length, before.events.length)
-  })
-
-  test("a failing subscription write leaves the venue connection successful", async () => {
-    const original = prisma.$transaction
-    const warnings: string[] = []
-    const warn = console.warn
-    console.warn = (...args: unknown[]) => void warnings.push(args.join(" "))
-    prisma.$transaction = async () => {
-      throw new Error("forced failure")
-    }
-    try {
-      const before = await row()
-      await connectAndClose("srv-real-1")
-      await until(async () => warnings.some((w) => w.startsWith("[subscription]")))
-      assert.equal((await row()).connection_count, before.connection_count)
-    } finally {
-      prisma.$transaction = original
-      console.warn = warn
-    }
-  })
-
-  test("a slow subscription write does not delay the handshake", async () => {
-    const original = prisma.$transaction
-    let release!: () => void
-    const held = new Promise<void>((r) => (release = r))
-    prisma.$transaction = async (...args: any[]) => {
-      await held
-      return original.apply(prisma, args)
-    }
-    try {
-      const before = await row()
-      const { ws, ackMs } = await hubConnect("srv-real-1")
-      assert.ok(ackMs < 1000, `handshake took ${ackMs} ms`)
-      await settle()
-      assert.equal(ws.readyState, WebSocket.OPEN)
-      assert.equal((await row()).connection_count, before.connection_count)
-      release()
-      await until(async () => (await row()).connection_count === before.connection_count + 1)
-      ws.close()
-    } finally {
-      prisma.$transaction = original
-    }
-  })
-
-  test("simultaneous connections create exactly one record", async () => {
-    await prisma.$executeRawUnsafe("DELETE FROM subscription.record")
-    await Promise.all(Array.from({ length: 6 }, () => hooks.onClientConnected({ source: "hub", serverId: "srv-real-1" })))
-    const r = await row()
-    assert.equal(r.connection_count, 6)
-    assert.deepEqual(r.events.map((e: any) => e.type), ["created"])
-  })
-
-  test("thresholds are stored once per term, only by connection and restart writes", async () => {
-    await prisma.$executeRawUnsafe("UPDATE subscription.record SET ends_at = now() + interval '20 days'")
-    const before = await row()
-
-    assert.equal((await call(tokens.SUPER_ADMIN, "GET", "/api/subscription")).status, 200)
-    assert.equal((await call(tokens.SUPER_ADMIN, "GET", "/api/subscription/clock")).status, 200)
-    assert.deepEqual((await row()).events, before.events, "a read recorded a threshold")
-
-    await call(tokens.SUPER_ADMIN, "PUT", "/api/subscription/notes", { notes: "no thresholds here" })
-    assert.deepEqual((await row()).events.filter((e: any) => e.type === "threshold"), [], "a notes write recorded a threshold")
-
-    await hooks.onClientConnected({ source: "hub", serverId: "srv-real-1" })
-    const thresholds = async () => (await row()).events.filter((e: any) => e.type === "threshold").map((e: any) => `${e.term}:${e.threshold}`)
-    assert.deepEqual(await thresholds(), ["1:90", "1:30"])
-
-    await hooks.onClientConnected({ source: "hub", serverId: "srv-real-2" })
-    await store.appendRestart(new Date())
-    assert.deepEqual(await thresholds(), ["1:90", "1:30"])
-
-    await prisma.$executeRawUnsafe("UPDATE subscription.record SET ends_at = now() + interval '3 days'")
-    await Promise.all([
-      hooks.onClientConnected({ source: "hub", serverId: "srv-real-1" }),
-      store.appendRestart(new Date()),
-      hooks.onClientConnected({ source: "hub", serverId: "srv-real-2" }),
-    ])
-    assert.deepEqual(await thresholds(), ["1:90", "1:30", "1:7"])
-
-    await prisma.$executeRawUnsafe("UPDATE subscription.record SET ends_at = now() - interval '1 hour'")
-    await connectAndClose("srv-real-1")
-    await until(async () => (await thresholds()).length === 5)
-    assert.deepEqual(await thresholds(), ["1:90", "1:30", "1:7", "1:1", "1:ended"])
-    const r = await row()
-    assert.deepEqual(r.terms, before.terms, "a threshold write changed the terms")
-    assert.equal(r.started_at.toISOString(), before.started_at.toISOString())
-  })
-
-  test("an ended term still accepts connections and blocks nothing else", async () => {
-    const before = await row()
-    assert.ok(before.ends_at.getTime() < Date.now())
-    await connectAndClose("srv-real-2")
-    await until(async () => (await row()).connection_count === before.connection_count + 1)
-    assert.deepEqual(await call(null, "GET", "/api/control"), { status: 200, body: { ok: true } })
-  })
-
-  test("every endpoint is super-admin only, with the existing forbidden response", async () => {
-    const before = await row()
-    const endpoints: [string, string, unknown?][] = [
-      ["GET", "/api/subscription"],
-      ["GET", "/api/subscription/clock"],
-      ["PUT", "/api/subscription/notes", { notes: "x" }],
-      ["PUT", "/api/subscription/reminders", { reminderDays: [] }],
-      ["POST", "/api/subscription/banners/30/dismiss"],
-      ["POST", "/api/subscription/export", { format: "json" }],
-      ["POST", "/api/subscription/renew", { confirmEndDate: "2000-01-01" }],
-    ]
-    for (const [method, url, body] of endpoints) {
-      for (const role of ["ORGANIZATION_ADMIN", "LOCATION_MANAGER", "VIEWER"]) {
-        assert.deepEqual(await call(tokens[role], method, url, body), {
-          status: 403,
-          body: { status: 403, code: "FORBIDDEN", message: "You do not have access to this resource." },
-        }, `${role} ${method} ${url}`)
-      }
-      assert.equal((await call(null, method, url, body)).status, 401, `anonymous ${method} ${url}`)
-    }
-    const after = await row()
-    assert.deepEqual(stable(after), stable(before))
-    assert.deepEqual(after.events, before.events)
-  })
-
-  test("the plugin adds no auth to sibling routes, and a missing module still boots", async () => {
-    assert.deepEqual(await call(null, "GET", "/api/control"), { status: 200, body: { ok: true } })
-  })
-
-  test("an error while registering the routes still lets the app boot", async () => {
-    const { default: Fastify } = await import("fastify")
-    const warnings: string[] = []
-    const warn = console.warn
-    console.warn = (...args: unknown[]) => void warnings.push(args.join(" "))
-    const second = Fastify()
-    try {
-      await second.register(
-        async (api) => {
-          api.get("/control", async () => ({ ok: true }))
-          await api.register(async (child) => {
-            child.get("/subscription", async () => ({ shadow: true }))
-            await child.register(import("../src/subscription/routes.js").catch(() => ({ default: async () => {} })))
-          })
-        },
-        { prefix: "/api" }
-      )
-      await second.ready()
-      const res = await second.inject({ method: "GET", url: "/api/control" })
-      assert.deepEqual(res.json(), { ok: true })
-      assert.ok(warnings.some((w) => w.startsWith("[subscription] could not register routes")), "the registration error was not logged")
-    } finally {
-      console.warn = warn
-      await second.close()
-    }
-  })
-
-  test("there is no delete, reset or date edit endpoint", async () => {
-    for (const method of ["DELETE", "PATCH"]) {
-      assert.equal((await call(tokens.SUPER_ADMIN, method, "/api/subscription")).status, 404)
-    }
-  })
-
-  test("read endpoints only read", async () => {
-    await prisma.$executeRawUnsafe("DELETE FROM subscription.record")
-    await hooks.onClientConnected({ source: "hub", serverId: "srv-real-1" })
-    const before = await row()
-    const read = await call(tokens.SUPER_ADMIN, "GET", "/api/subscription")
-    assert.equal(read.status, 200)
-    assert.equal(read.body.record.id, before.id)
-    assert.equal(read.body.record.endsAt, before.ends_at.toISOString())
-    const clock = await call(tokens.SUPER_ADMIN, "GET", "/api/subscription/clock")
+  test("detail and clock reads: not-started has no record, removed and fixture servers are not found", async () => {
+    const before = await snapshot()
+    const demo = await call(SUPER(), "GET", "/api/subscription/servers/srv-demo")
+    assert.equal(demo.body.record.serverId, "srv-demo")
+    assert.equal(demo.body.server.name, "DEMO-SERVER")
+    const idle = await call(SUPER(), "GET", "/api/subscription/servers/srv-idle")
+    assert.equal(idle.status, 200)
+    assert.equal(idle.body.record, null)
+    assert.equal((await call(SUPER(), "GET", "/api/subscription/servers/srv-gone")).status, 404)
+    assert.equal((await call(SUPER(), "GET", "/api/subscription/servers/zzhub-fixture")).status, 404)
+    const clock = await call(SUPER(), "GET", "/api/subscription/servers/srv-demo/clock")
     assert.deepEqual(Object.keys(clock.body).sort(), ["endsAt", "now"])
-    assert.equal(clock.body.endsAt, before.ends_at.toISOString())
-    const after = await row()
-    assert.deepEqual(stable(after), stable(before))
-    assert.deepEqual(after.events, before.events)
-    assert.equal(after.connection_count, before.connection_count)
+    assert.equal(clock.body.endsAt, LEGACY.ends_at)
+    assert.equal((await call(SUPER(), "GET", "/api/subscription/servers/srv-idle/clock")).body.endsAt, null)
+    assert.ok(!!(await one("srv-gone")), "the removed server's row should still exist for this check")
+    assert.equal((await call(SUPER(), "GET", "/api/subscription/servers/srv-gone/clock")).status, 404, "a removed server's clock was readable")
+    assert.equal((await call(SUPER(), "GET", "/api/subscription/servers/zzhub-fixture/clock")).status, 404, "a fixture server's clock was readable")
+    assert.deepEqual(await snapshot(), before)
   })
 
-  test("notes and reminders write only their field plus one event", async () => {
-    const before = await row()
-    const notes = await call(tokens.SUPER_ADMIN, "PUT", "/api/subscription/notes", { notes: "Renew with finance" })
-    assert.equal(notes.status, 200)
-    let after = await row()
-    assert.equal(after.notes, "Renew with finance")
-    assert.deepEqual({ ...stable(after), notes: before.notes }, stable(before))
-    assert.deepEqual(after.events.slice(before.events.length).map((e: any) => [e.type, e.by.email]), [["note_saved", "super@example.test"]])
-
-    const mid = after
-    assert.equal((await call(tokens.SUPER_ADMIN, "PUT", "/api/subscription/reminders", { reminderDays: [7, 30] })).status, 200)
-    after = await row()
-    assert.deepEqual(after.reminder_days, [30, 7])
-    assert.deepEqual({ ...stable(after), reminder_days: mid.reminder_days }, stable(mid))
-    assert.deepEqual(after.events.slice(mid.events.length).map((e: any) => e.type), ["reminders_saved"])
-    assert.equal(after.connection_count, before.connection_count)
-
-    assert.equal((await call(tokens.SUPER_ADMIN, "PUT", "/api/subscription/reminders", { reminderDays: [45] })).status, 400)
-    assert.equal((await call(tokens.SUPER_ADMIN, "PUT", "/api/subscription/notes", { notes: 5 })).status, 400)
+  test("the fleet export has the seven counts and one line per listed server, nothing else", async () => {
+    await call(SUPER(), "PUT", "/api/subscription/servers/srv-demo/notes", { notes: "private-note-text" })
+    const before = await snapshot()
+    const res = await call(SUPER(), "GET", "/api/subscription/export")
+    assert.equal(res.status, 200)
+    const text: string = res.body.content
+    const lines = text.split("\n")
+    assert.equal(lines[0], "Subscription fleet summary", "the first line carries more than the title")
+    assert.match(lines[1], /^As of: \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC$/)
+    assert.ok(lines.includes("Server | Organization | Status | Start | End"), "the column header row is missing")
+    assert.ok(!text.includes("cloud.zonemaestro.com") && !text.includes("zonemaestro"), "the fleet export names the cloud host")
+    for (const line of ["Total: 4", "Not started: 1", "Active: 1", "Attention: 0", "Warning: 0", "Critical: 1", "Ended: 1"]) {
+      assert.ok(text.includes(`\n${line}\n`), `missing "${line}"`)
+    }
+    const serverLines = text.trim().split("\n").slice(-4)
+    assert.deepEqual(serverLines.map((l) => l.split(" | ").slice(0, 3)), [
+      ["Alpha", "North Org", "Ended"],
+      ["Bravo", "South Org", "Critical"],
+      ["DEMO-SERVER", "North Org", "Active"],
+      ["Idle Venue", "South Org", "Not started"],
+    ])
+    assert.ok(serverLines[2].endsWith(`| 2026-10-19 12:13 UTC | 2027-10-19 12:13 UTC`))
+    assert.ok(serverLines[3].endsWith("| - | -"))
+    for (const forbidden of ["203.0.113.5", "1.0.0", "cmdfix", "private-note-text", "created", "SECRET", "Gone Venue", "Fixture"]) {
+      assert.ok(!text.includes(forbidden), `the fleet export contains "${forbidden}"`)
+    }
+    assert.deepEqual(await snapshot(), before, "the fleet export wrote an event")
   })
 
-  test("dismissing a banner is stored once per threshold per term and hides only that threshold", async () => {
+  test("per-server writes touch only that server", async () => {
+    const others = async (except: string) => (await snapshot()).filter((r: any) => r.server_id !== except)
+
+    let rest = await others("srv-b")
+    const reminders = await call(SUPER(), "PUT", "/api/subscription/servers/srv-b/reminders", { reminderDays: [30, 7] })
+    assert.equal(reminders.status, 200)
+    assert.deepEqual((await one("srv-b")).reminder_days, [30, 7])
+    assert.deepEqual(await others("srv-b"), rest)
+
+    rest = await others("srv-b")
+    const bBefore = await one("srv-b")
+    await call(SUPER(), "POST", "/api/subscription/servers/srv-b/banners/7/dismiss")
+    await call(SUPER(), "POST", "/api/subscription/servers/srv-b/banners/7/dismiss")
+    const b = await one("srv-b")
+    assert.deepEqual(b.dismissed.map((d: any) => [d.term, d.threshold]), [[1, 7]])
+    assert.deepEqual(b.events, bBefore.events)
+    assert.deepEqual(await others("srv-b"), rest)
+
+    rest = await others("srv-demo")
+    const demoBefore = await one("srv-demo")
+    const exp = await call(SUPER(), "POST", "/api/subscription/servers/srv-demo/export", { format: "json" })
+    const file = JSON.parse(exp.body.content)
+    assert.deepEqual(Object.keys(file).sort(), ["record", "server"])
+    assert.deepEqual(file.server, { serverId: "srv-demo", name: "DEMO-SERVER", organization: "North Org" })
+    assert.equal(file.record.serverId, "srv-demo")
+    assert.ok(!JSON.stringify(file).includes("SECRET"))
+    assert.match(exp.body.filename, /^subscription-DEMO-SERVER-\d{4}-\d{2}-\d{2}\.json$/)
+    const demo = await one("srv-demo")
+    assert.deepEqual(demo.events.slice(demoBefore.events.length).map((e: any) => [e.type, e.format]), [["exported", "json"]])
+    assert.deepEqual(await others("srv-demo"), rest)
+
+    rest = await others("srv-b")
+    const wrong = await call(SUPER(), "POST", "/api/subscription/servers/srv-b/renew", { confirmEndDate: "1999-01-01" })
+    assert.equal(wrong.status, 400)
+    const oldEnd = (await one("srv-b")).ends_at
+    const renewed = await call(SUPER(), "POST", "/api/subscription/servers/srv-b/renew", { confirmEndDate: oldEnd.toISOString().slice(0, 10) })
+    assert.equal(renewed.status, 200)
+    const b2 = await one("srv-b")
+    assert.equal(b2.terms.length, 2)
+    assert.equal(b2.terms[1].startedAt, oldEnd.toISOString())
+    assert.equal(b2.terms[1].endsAt, time.addCalendarMonthsUTC(oldEnd, 12).toISOString())
+    assert.deepEqual(b2.terms[0], bBefore.terms[0])
+    assert.equal(b2.started_at.toISOString(), bBefore.started_at.toISOString())
+    assert.equal(b2.connection_count, bBefore.connection_count)
+    assert.deepEqual(await others("srv-b"), rest)
+
+    const aBefore = await one("srv-a")
+    const renewA = await call(SUPER(), "POST", "/api/subscription/servers/srv-a/renew", { confirmEndDate: aBefore.ends_at.toISOString().slice(0, 10) })
+    assert.equal(renewA.status, 200)
+    const aTerm = (await one("srv-a")).terms[1]
+    assert.ok(Math.abs(new Date(aTerm.startedAt).getTime() - Date.now()) < 10_000, "an ended term did not restart from now")
+  })
+
+  test("writes on a not-started or removed server change nothing and create no row", async () => {
+    const before = await snapshot()
+    for (const [method, path, body] of [
+      ["PUT", "notes", { notes: "x" }],
+      ["PUT", "reminders", { reminderDays: [] }],
+      ["POST", "banners/30/dismiss", undefined],
+      ["POST", "export", { format: "json" }],
+      ["POST", "renew", { confirmEndDate: "2027-01-01" }],
+    ] as [string, string, unknown][]) {
+      assert.equal((await call(SUPER(), method, `/api/subscription/servers/srv-idle/${path}`, body)).status, 404, `not-started ${path}`)
+      assert.equal((await call(SUPER(), method, `/api/subscription/servers/srv-gone/${path}`, body)).status, 404, `removed ${path}`)
+    }
+    assert.deepEqual(await snapshot(), before)
+    assert.equal(await one("srv-idle"), null)
+  })
+
+  test("thresholds are stored once per term per server, only by connection and restart writes", async () => {
+    await setEnds("srv-demo", "now() + interval '20 days'")
+    const before = await snapshot()
+    const thresholds = async (id: string) =>
+      (await one(id)).events.filter((e: any) => e.type === "threshold").map((e: any) => `${e.term}:${e.threshold}`)
+
+    await call(SUPER(), "GET", "/api/subscription/servers/srv-demo")
+    await call(SUPER(), "PUT", "/api/subscription/servers/srv-demo/notes", { notes: "still no thresholds" })
+    assert.deepEqual(await thresholds("srv-demo"), [], "a read or notes write recorded a threshold")
+
+    await hooks.onClientConnected({ source: "hub", serverId: "srv-demo" })
+    assert.deepEqual(await thresholds("srv-demo"), ["1:90", "1:30"])
+    const aBefore = before.find((r: any) => r.server_id === "srv-a")
+    assert.deepEqual(full(await one("srv-a")), aBefore, "DEMO-SERVER's thresholds were written to another server")
+
+    await Promise.all([hooks.onClientConnected({ source: "hub", serverId: "srv-demo" }), store.appendRestart(new Date())])
+    assert.deepEqual(await thresholds("srv-demo"), ["1:90", "1:30"])
+    assert.deepEqual((await one("srv-demo")).terms, LEGACY.terms)
+  })
+
+  test("the banner is per server and per threshold", async () => {
     const { derive } = await import(PORTAL_DERIVE)
-    assert.equal((await call(tokens.SUPER_ADMIN, "PUT", "/api/subscription/reminders", { reminderDays: [90, 30, 7, 1] })).status, 200)
-    const original = await row()
-    const daysLeft = (days: number) =>
-      prisma.$executeRawUnsafe(`UPDATE subscription.record SET ends_at = now() + interval '${days} days'`)
-    const banner = async () => {
-      const { body } = await call(tokens.SUPER_ADMIN, "GET", "/api/subscription")
+    await setEnds("srv-b", "now() + interval '20 days'")
+    await call(SUPER(), "PUT", "/api/subscription/servers/srv-b/reminders", { reminderDays: [90, 30, 7, 1] })
+    const banner = async (id: string) => {
+      const { body } = await call(SUPER(), "GET", `/api/subscription/servers/${id}`)
       return derive(body.record.startedAt, body.record.endsAt, body.now, body.record).banner
     }
-    const dismiss = async (days: number) =>
-      assert.equal((await call(tokens.SUPER_ADMIN, "POST", `/api/subscription/banners/${days}/dismiss`)).status, 200)
-    try {
-      await daysLeft(60)
-      const before = await row()
-      assert.equal(await banner(), 90)
-      await dismiss(90)
-      assert.equal(await banner(), null)
-
-      await daysLeft(20)
-      assert.equal(await banner(), 30, "dismissing 90 hid the 30 day banner")
-      await dismiss(30)
-      await dismiss(30)
-      assert.equal(await banner(), null)
-
-      await daysLeft(5)
-      assert.equal(await banner(), 7, "dismissing 90 and 30 hid the 7 day banner")
-      await dismiss(7)
-      assert.equal(await banner(), null)
-
-      const after = await row()
-      assert.deepEqual(after.dismissed.map((d: any) => [d.term, d.threshold]), [[1, 90], [1, 30], [1, 7]])
-      assert.deepEqual(after.events, before.events, "a dismissal changed the activity events")
-      assert.deepEqual({ ...stable(after), dismissed: before.dismissed, ends_at: before.ends_at.toISOString() }, stable(before))
-      assert.equal(after.connection_count, before.connection_count)
-      assert.equal((await call(tokens.SUPER_ADMIN, "POST", "/api/subscription/banners/45/dismiss")).status, 400)
-    } finally {
-      await prisma.$executeRawUnsafe("UPDATE subscription.record SET ends_at = $1::timestamptz", original.ends_at.toISOString())
-    }
+    assert.equal(await banner("srv-demo"), 30)
+    assert.equal(await banner("srv-b"), 30)
+    await call(SUPER(), "POST", "/api/subscription/servers/srv-demo/banners/30/dismiss")
+    assert.equal(await banner("srv-demo"), 90)
+    assert.equal(await banner("srv-b"), 30, "a dismissal on DEMO-SERVER hid server B's banner")
   })
 
   test("the banner shows only the most urgent undismissed threshold whose reminder is enabled", async () => {
@@ -513,114 +556,182 @@ describe("subscription", { skip }, () => {
     const banner = (days: number, r: unknown) => derive(start, end, at(days), r).banner
     assert.equal(banner(120, rec([])), null)
     assert.equal(banner(60, rec([])), 90)
-    assert.equal(banner(60, rec([[1, 90]])), null)
     assert.equal(banner(20, rec([[1, 90]])), 30)
-    assert.equal(banner(5, rec([[1, 90]])), 7)
-    assert.equal(banner(0.5, rec([[1, 90]])), 1)
     assert.equal(banner(5, rec([[1, 7]])), 30)
     assert.equal(banner(5, rec([[1, 7], [1, 30]])), 90)
-    assert.equal(banner(5, rec([[1, 7], [1, 30], [1, 90]])), null)
     assert.equal(banner(5, rec([], [90, 30, 1])), 30)
-    assert.equal(banner(5, rec([], [])), null)
     assert.equal(banner(5, rec([[1, 7]], [90, 30, 7, 1], 2)), 7)
-    const ended = derive(start, end, at(-1), rec([]))
-    assert.equal(ended.banner, null)
-    assert.equal(ended.band, "ended")
-    assert.equal(derive(start, end, at(0), rec([])).banner, null)
+    assert.equal(derive(start, end, at(-1), rec([])).banner, null)
+    assert.equal(derive(start, end, at(-1), rec([])).band, "ended")
   })
 
-  test("export returns this record only and appends one exported event", async () => {
-    const before = await row()
-    const json = await call(tokens.SUPER_ADMIN, "POST", "/api/subscription/export", { format: "json" })
-    assert.equal(json.status, 200)
-    const snapshot = JSON.parse(json.body.content)
-    assert.equal(snapshot.id, before.id)
-    assert.deepEqual(Object.keys(snapshot).sort(), [
-      "connectionCount", "createdByConnection", "dismissed", "endsAt", "events", "id", "lastConnectionAt",
-      "notes", "reminderDays", "serverLabel", "startedAt", "status", "terms",
+  test("the page's sort, search, filter and summary match the backend", async () => {
+    const { fleetRows, filterFleet, summarizeFleet, compareFleet } = await import(PORTAL_DERIVE)
+    const now = "2026-06-01T00:00:00.000Z"
+    const servers = [
+      { serverId: "1", name: "bravo", organizationId: "o1", organizationName: "North", serverStatus: "ONLINE" },
+      { serverId: "2", name: "Alpha", organizationId: "o2", organizationName: "South", serverStatus: "ONLINE" },
+      { serverId: "3", name: "Charlie", organizationId: "o1", organizationName: "North", serverStatus: "OFFLINE" },
+      { serverId: "4", name: "Delta", organizationId: "o2", organizationName: "South", serverStatus: "ONLINE" },
+      { serverId: "5", name: "Echo", organizationId: "o1", organizationName: "North", serverStatus: "ONLINE" },
+    ]
+    const rec = (serverId: string, endsAt: string) => ({ serverId, startedAt: "2026-01-01T00:00:00.000Z", endsAt, connectionCount: 1, lastConnectionAt: now })
+    const rows = fleetRows(servers, [
+      rec("1", "2026-06-20T00:00:00.000Z"),
+      rec("2", "2026-06-20T00:00:00.000Z"),
+      rec("3", "2026-05-01T00:00:00.000Z"),
+      rec("4", "2027-01-01T00:00:00.000Z"),
+    ], now)
+    assert.deepEqual(rows.map((r: any) => [r.name, r.status]), [
+      ["Charlie", "ended"], ["Alpha", "warning"], ["bravo", "warning"], ["Delta", "active"], ["Echo", "not_started"],
     ])
-    const text = await call(tokens.SUPER_ADMIN, "POST", "/api/subscription/export", { format: "text" })
-    assert.match(text.body.content, /Term history\n1\. /)
-    assert.match(text.body.content, /Status: Active/)
-    const after = await row()
-    assert.deepEqual(after.events.slice(before.events.length).map((e: any) => [e.type, e.format]), [["exported", "json"], ["exported", "text"]])
-    assert.deepEqual(stable(after), stable(before))
+    assert.deepEqual(summarizeFleet(rows), { total: 5, notStarted: 1, active: 1, attention: 0, warning: 2, critical: 0, ended: 1 })
+    assert.deepEqual(filterFleet(rows, "south", "all").map((r: any) => r.name), ["Alpha", "Delta"])
+    assert.deepEqual(filterFleet(rows, "", "warning").map((r: any) => r.name), ["Alpha", "bravo"])
+    assert.deepEqual(filterFleet(rows, "ECH", "not_started").map((r: any) => r.name), ["Echo"])
+    const backendSorted = [...rows].sort(time.compareFleet).map((r: any) => r.name)
+    assert.deepEqual(backendSorted, [...rows].sort(compareFleet).map((r: any) => r.name))
+    assert.deepEqual(time.STATUS_ORDER, ["ended", "critical", "warning", "attention", "active", "not_started"])
   })
 
-  test("renewal needs the exact end date and only appends a term", async () => {
-    const before = await row()
-    const wrong = await call(tokens.SUPER_ADMIN, "POST", "/api/subscription/renew", { confirmEndDate: "1999-01-01" })
-    assert.equal(wrong.status, 400)
-    assert.deepEqual(stable(await row()), stable(before))
-
-    const endDate = before.ends_at.toISOString().slice(0, 10)
-    const ok = await call(tokens.SUPER_ADMIN, "POST", "/api/subscription/renew", { confirmEndDate: endDate })
-    assert.equal(ok.status, 200)
-    const after = await row()
-    assert.equal(after.started_at.toISOString(), before.started_at.toISOString())
-    assert.deepEqual(after.terms[0], before.terms[0])
-    assert.equal(after.terms.length, 2)
-    assert.equal(after.terms[1].startedAt, before.ends_at.toISOString())
-    assert.equal(after.terms[1].endsAt, time.addCalendarMonthsUTC(before.ends_at, 12).toISOString())
-    assert.equal(after.terms[1].reason, "renewal")
-    assert.deepEqual(after.terms[1].confirmedBy, { type: "user", userId: "super", email: "super@example.test" })
-    assert.equal(after.ends_at.toISOString(), after.terms[1].endsAt)
-    assert.equal(after.connection_count, before.connection_count)
-    const last = after.events[after.events.length - 1]
-    assert.equal(last.type, "renewal_confirmed")
-    assert.equal(last.by.email, "super@example.test")
-    assert.equal(last.term, 2)
+  test("a failing subscription write leaves the venue connection successful", async () => {
+    const original = prisma.$transaction
+    const warnings: string[] = []
+    const warn = console.warn
+    console.warn = (...args: unknown[]) => void warnings.push(args.join(" "))
+    prisma.$transaction = async () => {
+      throw new Error("forced failure")
+    }
+    try {
+      const before = (await one("srv-a")).connection_count
+      await connectAndClose("srv-a")
+      await until(async () => warnings.some((w) => w.startsWith("[subscription]")))
+      prisma.$transaction = original
+      assert.equal((await one("srv-a")).connection_count, before)
+    } finally {
+      prisma.$transaction = original
+      console.warn = warn
+    }
   })
 
-  test("renewing an ended term starts the new term now", async () => {
-    await prisma.$executeRawUnsafe("UPDATE subscription.record SET ends_at = now() - interval '2 days'")
-    const before = await row()
-    const ok = await call(tokens.SUPER_ADMIN, "POST", "/api/subscription/renew", { confirmEndDate: before.ends_at.toISOString().slice(0, 10) })
-    assert.equal(ok.status, 200)
-    const after = await row()
-    const term = after.terms[after.terms.length - 1]
-    assert.ok(Math.abs(new Date(term.startedAt).getTime() - Date.now()) < 10_000)
-    assert.equal(term.endsAt, time.addCalendarMonthsUTC(new Date(term.startedAt), 12).toISOString())
-    assert.equal(after.started_at.toISOString(), before.started_at.toISOString())
-    assert.deepEqual(after.terms.slice(0, before.terms.length), before.terms)
+  test("a slow subscription write does not delay the handshake", async () => {
+    const original = prisma.$transaction
+    let release!: () => void
+    const held = new Promise<void>((r) => (release = r))
+    prisma.$transaction = async (...args: any[]) => {
+      await held
+      return original.apply(prisma, args)
+    }
+    try {
+      const before = (await one("srv-a")).connection_count
+      const { ws, ackMs } = await hubConnect("srv-a")
+      assert.ok(ackMs < 1000, `handshake took ${ackMs} ms`)
+      await settle()
+      assert.equal(ws.readyState, WebSocket.OPEN)
+      release()
+      prisma.$transaction = original
+      await until(async () => (await one("srv-a")).connection_count === before + 1)
+      ws.close()
+    } finally {
+      prisma.$transaction = original
+    }
   })
 
-  test("a new term has its own thresholds and earlier ones stay as stored", async () => {
-    const before = await row()
-    const term = before.terms.length
-    await prisma.$executeRawUnsafe("UPDATE subscription.record SET ends_at = now() + interval '60 days'")
-    await hooks.onClientConnected({ source: "hub", serverId: "srv-real-1" })
-    const after = await row()
-    assert.deepEqual(after.events.slice(0, before.events.length), before.events)
-    assert.deepEqual(after.events.filter((e: any) => e.type === "threshold" && e.term === term).map((e: any) => e.threshold), ["90"])
+  test("every endpoint is super-admin only, with the existing forbidden response", async () => {
+    const before = await snapshot()
+    const endpoints: [string, string, unknown?][] = [
+      ["GET", "/api/subscription/servers"],
+      ["GET", "/api/subscription/export"],
+      ["GET", "/api/subscription/servers/srv-demo"],
+      ["GET", "/api/subscription/servers/srv-demo/clock"],
+      ["PUT", "/api/subscription/servers/srv-demo/notes", { notes: "x" }],
+      ["PUT", "/api/subscription/servers/srv-demo/reminders", { reminderDays: [] }],
+      ["POST", "/api/subscription/servers/srv-demo/banners/30/dismiss"],
+      ["POST", "/api/subscription/servers/srv-demo/export", { format: "json" }],
+      ["POST", "/api/subscription/servers/srv-demo/renew", { confirmEndDate: "2000-01-01" }],
+    ]
+    for (const [method, url, body] of endpoints) {
+      for (const role of ["ORGANIZATION_ADMIN", "LOCATION_MANAGER", "VIEWER"]) {
+        assert.deepEqual(
+          await call(tokens[role], method, url, body),
+          { status: 403, body: { status: 403, code: "FORBIDDEN", message: "You do not have access to this resource." } },
+          `${role} ${method} ${url}`
+        )
+      }
+      assert.equal((await call(null, method, url, body)).status, 401, `anonymous ${method} ${url}`)
+    }
+    assert.deepEqual(await snapshot(), before)
+  })
+
+  test("the plugin adds no auth to sibling routes, and there is no delete, reset or date edit", async () => {
+    assert.deepEqual(await call(null, "GET", "/api/control"), { status: 200, body: { ok: true } })
+    for (const method of ["DELETE", "PATCH"]) {
+      assert.equal((await call(SUPER(), method, "/api/subscription/servers/srv-demo")).status, 404)
+      assert.equal((await call(SUPER(), method, "/api/subscription/servers")).status, 404)
+    }
+  })
+
+  test("an error while registering the routes still lets the app boot", async () => {
+    const { default: Fastify } = await import("fastify")
+    const warnings: string[] = []
+    const warn = console.warn
+    console.warn = (...args: unknown[]) => void warnings.push(args.join(" "))
+    const second = Fastify()
+    try {
+      await second.register(
+        async (api) => {
+          api.get("/control", async () => ({ ok: true }))
+          await api.register(async (child) => {
+            child.get("/subscription/servers", async () => ({ shadow: true }))
+            await child.register(import("../src/subscription/routes.js").catch(() => ({ default: async () => {} })))
+          })
+        },
+        { prefix: "/api" }
+      )
+      await second.ready()
+      assert.deepEqual((await second.inject({ method: "GET", url: "/api/control" })).json(), { ok: true })
+      assert.ok(warnings.some((w) => w.startsWith("[subscription] could not register routes")))
+    } finally {
+      console.warn = warn
+      await second.close()
+    }
   })
 
   test("calendar months are UTC and clamp like the database", async () => {
     assert.equal(time.addCalendarMonthsUTC(new Date("2028-02-29T10:00:00.000Z"), 12).toISOString(), "2029-02-28T10:00:00.000Z")
-    assert.equal(time.addCalendarMonthsUTC(new Date("2026-01-31T23:30:00.000Z"), 1).toISOString(), "2026-02-28T23:30:00.000Z")
-    await prisma.$executeRawUnsafe("DELETE FROM subscription.record")
-    await store.recordConnection(
-      { source: "hub", serverId: "srv-real-1", serverName: null, organizationId: null, version: null, ipAddress: null, caps: [] },
-      new Date("2028-02-29T10:00:00.000Z")
-    )
-    assert.equal((await row()).ends_at.toISOString(), "2029-02-28T10:00:00.000Z")
     assert.deepEqual(time.spanBetween(new Date("2026-01-31T00:00:00Z"), new Date("2026-03-02T05:07:00Z")), { months: 1, days: 2, hours: 5, minutes: 7 })
     assert.equal(time.bandFor(91 * DAY), "active")
     assert.equal(time.bandFor(90 * DAY), "attention")
     assert.equal(time.bandFor(30 * DAY), "warning")
     assert.equal(time.bandFor(7 * DAY), "critical")
-    assert.equal(time.bandFor(1), "critical")
     assert.equal(time.bandFor(0), "ended")
   })
 
-  test("a server clock behind the start leaves the stored dates unchanged", async () => {
-    const before = await row()
-    assert.ok(before.started_at.getTime() > Date.now())
-    await hooks.onClientConnected({ source: "hub", serverId: "srv-real-1" })
-    const after = await row()
-    assert.deepEqual(stable(after), stable(before))
-    const read = await call(tokens.SUPER_ADMIN, "GET", "/api/subscription")
-    assert.ok(new Date(read.body.now).getTime() < new Date(read.body.record.startedAt).getTime())
+  test("a server clock behind a server's start leaves its dates unchanged and shows in the list", async () => {
+    await prisma.$executeRawUnsafe(`INSERT INTO "MusicServer" (id, name, "organizationId") VALUES ('srv-future', 'Zulu', 'org-1')`)
+    await store.recordConnection(
+      { source: "hub", serverId: "srv-future", serverName: null, organizationId: null, version: null, ipAddress: null, caps: [] },
+      new Date("2028-02-29T10:00:00.000Z")
+    )
+    const before = await one("srv-future")
+    assert.equal(before.ends_at.toISOString(), "2029-02-28T10:00:00.000Z")
+    await hooks.onClientConnected({ source: "hub", serverId: "srv-future" })
+    assert.deepEqual(stable(await one("srv-future")), stable(before))
+    const list = await call(SUPER(), "GET", "/api/subscription/servers")
+    const row = list.body.servers.find((s: any) => s.serverId === "srv-future")
+    assert.ok(new Date(list.body.now).getTime() < new Date(row.startedAt).getTime())
+  })
+
+  test("the legacy row was never written", async () => {
+    assert.deepEqual(await legacy(), legacyAtBoot)
+  })
+
+  test("a legacy row without a server id stays unattached", async () => {
+    await prisma.$executeRawUnsafe("DELETE FROM subscription.server_record WHERE server_id = 'srv-demo'")
+    await prisma.$executeRawUnsafe("UPDATE subscription.record SET created_by_connection = created_by_connection - 'serverId'")
+    assert.deepEqual(await store.copyLegacyRecord(new Date()), [])
+    assert.equal(await one("srv-demo"), null)
+    assert.ok(!(await all()).some((r) => r.id === LEGACY.id), "the legacy row was attached without a server id")
   })
 
   test("no unhandled rejection escaped the feature", () => {

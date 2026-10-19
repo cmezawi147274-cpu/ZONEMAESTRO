@@ -1,7 +1,7 @@
 "use client"
 
-import { SubscriptionPage } from "@/components/subscription/subscription-page"
+import { SubscriptionFleetPage } from "@/components/subscription/fleet-page"
 
 export default function Page() {
-  return <SubscriptionPage />
+  return <SubscriptionFleetPage />
 }
