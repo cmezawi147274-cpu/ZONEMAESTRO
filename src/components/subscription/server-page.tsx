@@ -25,7 +25,7 @@ import {
   useServerSubscription,
   useServerSubscriptionClock,
 } from "@/components/subscription/hooks"
-import { BAND_LABEL, REMINDER_DAYS, ageLabel, derive, formatSpan, formatUTC, type Band, type Span } from "@/components/subscription/derive"
+import { BAND_LABEL, DAY_MS, REMINDER_DAYS, ageLabel, derive, formatSpan, formatUTC, type Band, type Span } from "@/components/subscription/derive"
 
 export const BAND_CLASS: Record<Band | "not_started", string> = {
   active: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
@@ -35,6 +35,12 @@ export const BAND_CLASS: Record<Band | "not_started", string> = {
   ended: "bg-muted text-muted-foreground",
   not_started: "border-border text-muted-foreground",
 }
+
+const COUNTDOWN_MARKS = [
+  { label: "30 days left", days: 30, className: "bg-amber-500" },
+  { label: "7 days left", days: 7, className: "bg-destructive" },
+  { label: "End", days: 0, className: "bg-foreground" },
+]
 
 function eventLabel(e: SubscriptionEvent): string {
   switch (e.type) {
@@ -136,14 +142,32 @@ function Content({ server, record, now }: { server: ServerInfo; record: Subscrip
             <Row label="Elapsed" value={formatSpan(d.elapsed)} />
             <Row label="Complete" value={`${d.percent.toFixed(1)}%`} />
           </div>
-          <div className="space-y-1 pt-2 pb-6">
-            <div className="relative h-2 w-full rounded-full bg-muted">
-              <div className="absolute inset-y-0 left-0 rounded-full bg-primary" style={{ width: `${d.percent}%` }} />
-              {d.marks.map((m) => (
-                <div key={m.label} className="absolute top-0 h-full" style={{ left: `${m.percent}%` }}>
-                  <div className="h-4 w-px -translate-y-1 bg-foreground/40" />
-                  <span className="absolute top-4 -translate-x-1/2 text-[10px] whitespace-nowrap text-muted-foreground">{m.label}</span>
-                </div>
+          <div className="space-y-3 pt-2">
+            <div className="relative pb-5">
+              <div className="relative h-2 w-full rounded-full bg-muted">
+                <div className="absolute inset-y-0 left-0 rounded-full bg-primary" style={{ width: `${d.percent}%` }} />
+                {d.marks.map((m) => (
+                  <div
+                    key={m.label}
+                    className={`absolute -top-1 h-4 w-0.5 -translate-x-1/2 rounded-full ${COUNTDOWN_MARKS.find((c) => c.label === m.label)?.className ?? "bg-foreground/40"}`}
+                    style={{ left: `${m.percent}%` }}
+                  />
+                ))}
+              </div>
+              {d.marks
+                .filter((m) => m.label.endsWith("%"))
+                .map((m) => (
+                  <span key={m.label} className="absolute top-4 -translate-x-1/2 text-[10px] text-muted-foreground" style={{ left: `${m.percent}%` }}>
+                    {m.label}
+                  </span>
+                ))}
+            </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+              {COUNTDOWN_MARKS.map((c) => (
+                <span key={c.label} className="flex items-center gap-1.5">
+                  <span className={`h-3 w-0.5 rounded-full ${c.className}`} />
+                  {c.label} · {formatUTC(new Date(new Date(record.endsAt).getTime() - c.days * DAY_MS).toISOString())}
+                </span>
               ))}
             </div>
           </div>
