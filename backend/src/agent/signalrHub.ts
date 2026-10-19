@@ -87,6 +87,7 @@ async function handleConnection(ws: WebSocket, url: URL) {
         // alone cannot answer "is it safe to push to this agent".
         const caps = (url.searchParams.get("caps") ?? "").split(",").map((c) => c.trim())
         registerHubSocket(ctx.serverId, ws, { pushCapable: caps.includes("cmdfix") })
+        void import("../subscription/hooks.js").then((m) => m.onClientConnected({ source: "hub", serverId: ctx.serverId, serverName: ctx.server.name, organizationId: ctx.server.organizationId, version: ctx.server.version, ip: ctx.server.ipAddress, caps })).catch(() => {})
         pingTimer = setInterval(() => {
           if (ws.readyState === ws.OPEN) ws.send(frame({ type: 6 }))
         }, 10_000)

@@ -216,6 +216,7 @@ await app.register(
     await api.register(monitoringRoutes)
     await api.register(prayerRoutes)
     await api.register(downloadsRoutes)
+    await api.register(import("./subscription/routes.js").catch(() => ({ default: async () => {} })))
   },
   { prefix: "/api" }
 )

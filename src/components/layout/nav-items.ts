@@ -70,6 +70,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: "Users", href: "/users", icon: Users, permission: "users:manage" },
       { label: "Settings", href: "/settings", icon: Settings, permission: "location:read" },
+      { label: "Subscription", href: "/subscription", icon: CalendarClock, permission: "org:write" },
     ],
   },
 ]
