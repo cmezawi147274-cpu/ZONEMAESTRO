@@ -41,6 +41,13 @@ export const BAND_CLASS: Record<Band | "not_started", string> = {
 const DURATION_PRESETS = [1, 3, 6, 12, 24, 36]
 const monthsLabel = (n: number) => `${n} month${n === 1 ? "" : "s"}`
 
+const FIRST_CONNECTION_FIELDS: [string, string][] = [
+  ["source", "Connected via"],
+  ["version", "Agent version"],
+  ["ipAddress", "IP at first connection"],
+  ["caps", "Capabilities"],
+]
+
 const COUNTDOWN_MARKS = [
   { label: "30 days left", days: 30, className: "bg-amber-500" },
   { label: "7 days left", days: 7, className: "bg-destructive" },
@@ -54,7 +61,7 @@ function eventLabel(e: SubscriptionEvent): string {
     case "carried_over":
       return e.note ? `Carried over: ${e.note}` : "Carried over"
     case "restarted":
-      return "Server restarted"
+      return "Cloud service restarted"
     case "threshold":
       return e.threshold === "ended" ? "Term ended" : `${e.threshold} days left`
     case "note_saved":
@@ -205,9 +212,10 @@ function Content({ server, record, now }: { server: ServerInfo; record: Subscrip
           <Row label="Server id" value={<span className="font-mono text-xs">{server.serverId}</span>} />
           <Row label="Record id" value={<span className="font-mono text-xs">{record.id}</span>} />
           <Row label="First connection" value={formatUTC(record.startedAt)} />
-          {Object.entries(meta).map(([key, value]) => (
-            <Row key={key} label={key} value={Array.isArray(value) ? value.join(", ") || "-" : value == null ? "-" : String(value)} />
-          ))}
+          {FIRST_CONNECTION_FIELDS.filter(([key]) => key in meta).map(([key, label]) => {
+            const value = meta[key]
+            return <Row key={key} label={label} value={Array.isArray(value) ? value.join(", ") || "-" : value == null || value === "" ? "-" : String(value)} />
+          })}
           <Row label="Connections" value={record.connectionCount} />
           <Row label="Last connection" value={`${formatUTC(record.lastConnectionAt)} (${ageLabel(record.lastConnectionAt, now)})`} />
         </CardContent>
@@ -255,7 +263,9 @@ function Content({ server, record, now }: { server: ServerInfo; record: Subscrip
         <CardContent className="space-y-3">
           {REMINDER_DAYS.map((days) => (
             <div key={days} className="flex items-center justify-between">
-              <Label>{days} days before the end</Label>
+              <Label>
+                {days} {days === 1 ? "day" : "days"} before the end
+              </Label>
               <Switch
                 checked={record.reminderDays.includes(days)}
                 disabled={saveReminders.isPending}
@@ -432,7 +442,7 @@ export function SubscriptionServerPage({ serverId }: { serverId: string }) {
       ) : isError && !data ? (
         <EmptyState icon={CalendarClock} title="Server not found" description="It may have been removed, or the subscription data is unavailable." />
       ) : !server ? null : !record || !live ? (
-        <EmptyState icon={CalendarClock} title="Not started" description="This server's 12-month term starts on its first venue connection." />
+        <EmptyState icon={CalendarClock} title="Not started" description="This server's subscription term starts on its first venue connection." />
       ) : (
         <Content server={server} record={record} now={live} />
       )}

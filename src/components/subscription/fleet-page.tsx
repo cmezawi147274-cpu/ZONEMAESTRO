@@ -21,11 +21,17 @@ import {
   STATUS_ORDER,
   ageLabel,
   filterFleet,
-  formatSpan,
   formatUTC,
   spanBetween,
   type FleetStatus,
+  type Span,
 } from "@/components/subscription/derive"
+
+function shortSpan(span: Span): string {
+  if (span.months > 0) return `${span.months} mo ${span.days} d`
+  if (span.days > 0) return `${span.days} d ${span.hours} h`
+  return `${span.hours} h ${span.minutes} min`
+}
 
 const SUMMARY: { key: keyof FleetSummary; label: string }[] = [
   { key: "total", label: "Total" },
@@ -55,7 +61,7 @@ export function SubscriptionFleetPage() {
     <div className="space-y-6">
       <PageHeader
         title="Subscription"
-        description="Each server's 12-month term, from its own first venue connection."
+        description="Each server's subscription term, from its own first venue connection."
         actions={
           <Button variant="outline" size="sm" disabled={!data || exportFleet.isPending} onClick={() => exportFleet.mutate()}>
             {exportFleet.isPending ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />} Export fleet summary
@@ -138,7 +144,7 @@ export function SubscriptionFleetPage() {
               <TableBody>
                 {rows.map((r) => {
                   const behind = !!r.startedAt && new Date(now).getTime() < new Date(r.startedAt).getTime()
-                  const left = r.endsAt && r.status !== "ended" ? formatSpan(spanBetween(new Date(now), new Date(r.endsAt))) : "-"
+                  const left = r.endsAt && r.status !== "ended" ? shortSpan(spanBetween(new Date(now), new Date(r.endsAt))) : "-"
                   return (
                     <TableRow key={r.serverId}>
                       <TableCell>
