@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import {
+  Command,
   CommandDialog,
   CommandEmpty,
   CommandGroup,
@@ -53,32 +54,34 @@ export function CommandPalette() {
       title="Go to…"
       description="Jump to any page you have access to"
     >
-      <CommandInput placeholder="Jump to a page…" />
-      <CommandList>
-        <CommandEmpty>No matching page.</CommandEmpty>
-        {NAV_GROUPS.map((group) => {
-          // Filtered through the exact same can() the sidebar itself
-          // gates on (src/lib/auth/rbac.ts) — a page a role can't see in
-          // the sidebar must not become discoverable by typing its name
-          // here instead (product rule 5: capability-based, not a second,
-          // looser gate).
-          const items = group.items.filter((item) => !item.permission || can(item.permission))
-          if (items.length === 0) return null
-          return (
-            <CommandGroup key={group.label} heading={group.label}>
-              {items.map((item) => {
-                const Icon = item.icon
-                return (
-                  <CommandItem key={item.href} value={item.label} onSelect={() => go(item.href)}>
-                    <Icon />
-                    {item.label}
-                  </CommandItem>
-                )
-              })}
-            </CommandGroup>
-          )
-        })}
-      </CommandList>
+      <Command>
+        <CommandInput placeholder="Jump to a page…" />
+        <CommandList>
+          <CommandEmpty>No matching page.</CommandEmpty>
+          {NAV_GROUPS.map((group) => {
+            // Filtered through the exact same can() the sidebar itself
+            // gates on (src/lib/auth/rbac.ts) — a page a role can't see in
+            // the sidebar must not become discoverable by typing its name
+            // here instead (product rule 5: capability-based, not a second,
+            // looser gate).
+            const items = group.items.filter((item) => !item.permission || can(item.permission))
+            if (items.length === 0) return null
+            return (
+              <CommandGroup key={group.label} heading={group.label}>
+                {items.map((item) => {
+                  const Icon = item.icon
+                  return (
+                    <CommandItem key={item.href} value={item.label} onSelect={() => go(item.href)}>
+                      <Icon />
+                      {item.label}
+                    </CommandItem>
+                  )
+                })}
+              </CommandGroup>
+            )
+          })}
+        </CommandList>
+      </Command>
     </CommandDialog>
   )
 }

@@ -41,7 +41,7 @@ export default async function syncRoutes(app: FastifyInstance) {
       where.serverId = { in: own.map((s) => s.id) }
     }
 
-    const states = await prisma.trackSyncState.findMany({ where, orderBy: { updatedAt: "desc" }, take: 1000 })
+    const states = await prisma.trackSyncState.findMany({ where, orderBy: { updatedAt: "desc" }, take: 10000 })
     return reply.send(states.map(toTrackSyncState))
   })
 

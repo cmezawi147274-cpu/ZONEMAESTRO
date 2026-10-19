@@ -1,6 +1,6 @@
 "use client"
 
-import { use } from "react"
+import { use, useState } from "react"
 import Link from "next/link"
 import { ArrowLeft, ArrowUp, ArrowDown, X, ListMusic } from "lucide-react"
 import { PageHeader } from "@/components/common/page-header"
@@ -8,6 +8,7 @@ import { EmptyState } from "@/components/common/empty-state"
 import { RoleGate } from "@/components/common/role-gate"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { AddTracksDialog } from "@/components/playlists/add-tracks-dialog"
 import { AssignPlaylistDialog } from "@/components/playlists/assign-playlist-dialog"
@@ -23,6 +24,7 @@ export default function PlaylistDetailPage(props: PageProps<"/playlists/[id]">) 
   const { data: tracks } = useTracksByIds(playlist?.trackIds)
   const reorder = useUpdatePlaylistTracks()
   const removeTrack = useRemoveTrackFromPlaylist()
+  const [query, setQuery] = useState("")
 
   if (isLoading) {
     return (
@@ -37,6 +39,9 @@ export default function PlaylistDetailPage(props: PageProps<"/playlists/[id]">) 
 
   const trackList = playlist.trackIds.map((tid) => tracks?.find((t) => t.id === tid)).filter(Boolean)
   const totalDuration = trackList.reduce((sum, t) => sum + (t?.durationSec ?? 0), 0)
+  const q = query.trim().toLowerCase()
+  const matches = (t: (typeof trackList)[number]) =>
+    q === "" || [t!.title, t!.artist, t!.album].some((v) => v.toLowerCase().includes(q))
 
   function move(index: number, delta: number) {
     const newIndex = index + delta
@@ -58,6 +63,7 @@ export default function PlaylistDetailPage(props: PageProps<"/playlists/[id]">) 
           actions={
             <RoleGate permission="playlist:write">
               <div className="flex gap-2">
+                <Input placeholder="Search tracks" value={query} onChange={(e) => setQuery(e.target.value)} className="h-7 w-28 rounded-[min(var(--radius-md),12px)] border-border px-2.5 text-[0.8rem] sm:w-40 md:text-[0.8rem] dark:border-input" />
                 <AssignPlaylistDialog playlistId={playlist.id} />
                 <RoleGate permission="music:library"><AddTracksDialog playlist={playlist} /></RoleGate>
               </div>
@@ -72,7 +78,7 @@ export default function PlaylistDetailPage(props: PageProps<"/playlists/[id]">) 
             <EmptyState icon={ListMusic} title="No tracks yet" description="Add tracks from the cloud library." className="border-none" />
           ) : (
             <div className="divide-y">
-              {trackList.map((track, index) => (
+              {trackList.map((track, index) => !matches(track) ? null : (
                 <div key={track!.id} className="flex items-center gap-3 p-3">
                   <span className="w-5 text-center text-sm text-muted-foreground tabular-nums">{index + 1}</span>
                   <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: track!.coverColor }} />
@@ -107,6 +113,7 @@ export default function PlaylistDetailPage(props: PageProps<"/playlists/[id]">) 
                   </RoleGate>
                 </div>
               ))}
+              {q !== "" && !trackList.some(matches) && <p className="p-3 text-sm text-muted-foreground">No tracks match</p>}
             </div>
           )}
         </CardContent>

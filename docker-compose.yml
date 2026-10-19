@@ -34,8 +34,7 @@ services:
     # Unbounded json-file logging is how a chatty agent fleet fills the disk
     # and takes the host down. Capped here as well as quietened in the app.
     logging:
-      driver: "json-file"
-      options: { max-size: "10m", max-file: "3" }
+      driver: "journald"
     deploy:
       resources:
         limits: { memory: 1g }
@@ -76,8 +75,7 @@ services:
     # Unbounded json-file logging is how a chatty agent fleet fills the disk
     # and takes the host down. Capped here as well as quietened in the app.
     logging:
-      driver: "json-file"
-      options: { max-size: "10m", max-file: "3" }
+      driver: "journald"
     deploy:
       resources:
         limits: { memory: 1g }
@@ -136,7 +134,7 @@ services:
     restart: unless-stopped
     logging:
       driver: "json-file"
-      options: { max-size: "10m", max-file: "3" }
+      options: { max-size: "100m", max-file: "20", compress: "true" }
     ports:
       - "80:80"
       - "443:443"

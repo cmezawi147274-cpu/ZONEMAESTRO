@@ -286,7 +286,6 @@ export default function ServerDetailPage(props: PageProps<"/servers/[id]">) {
           <TabsTrigger value="sync">Music Sync</TabsTrigger>
           <TabsTrigger value="schedules">Schedules</TabsTrigger>
           <TabsTrigger value="commands">Commands</TabsTrigger>
-          <TabsTrigger value="logs">Logs</TabsTrigger>
         </TabsList>
 
         <TabsContent value="zones" className="pt-4">
@@ -340,16 +339,6 @@ export default function ServerDetailPage(props: PageProps<"/servers/[id]">) {
           <Card>
             <CardContent>
               <CommandHistory commands={commands} isLoading={commandsLoading} />
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="logs" className="pt-4">
-          <Card>
-            <CardContent>
-              {/* Nothing writes LogEntry and no agent uploads its logs, so
-                  there is no data source to list here yet. */}
-              <p className="text-sm text-muted-foreground">Server logs are not available.</p>
             </CardContent>
           </Card>
         </TabsContent>

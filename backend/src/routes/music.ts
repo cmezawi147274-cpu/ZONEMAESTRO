@@ -209,7 +209,7 @@ export default async function musicRoutes(app: FastifyInstance) {
           part.file.resume()
           throw badRequest(`"${part.filename}" is not a supported audio file. Accepted formats: ${ALLOWED_EXT_LIST}.`)
         }
-        const storageKey = `${Date.now()}-${part.filename.replace(/[^a-zA-Z0-9._-]/g, "_")}`
+        const storageKey = `${Date.now()}-${part.filename.replace(/[^a-zA-Z0-9._-]/g, "_").replace(/\.{2,}/g, ".")}`
         const destPath = path.join(env.musicStorageDir, storageKey)
         await pipeline(part.file, fs.createWriteStream(destPath))
         // @fastify/multipart truncates at the configured fileSize limit
