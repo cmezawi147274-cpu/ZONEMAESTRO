@@ -54,6 +54,18 @@ export function useUpdatePlaylistTracks() {
   })
 }
 
+export function useRenamePlaylist() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) => playlistsApi.update(id, { name }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["playlists"] })
+      toast.success("Playlist renamed")
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+}
+
 export function useAddTrackToPlaylist() {
   const qc = useQueryClient()
   return useMutation({

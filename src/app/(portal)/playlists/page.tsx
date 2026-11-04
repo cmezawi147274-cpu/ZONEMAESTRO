@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { CreatePlaylistDialog } from "@/components/playlists/create-playlist-dialog"
 import { PlaylistAccessDialog } from "@/components/playlists/playlist-access-dialog"
+import { RenamePlaylistDialog } from "@/components/playlists/rename-playlist-dialog"
 import { usePlaylists, useDuplicatePlaylist, useDeletePlaylist } from "@/hooks/use-playlists"
 import { useOrganizations } from "@/hooks/use-organizations"
 
@@ -101,6 +102,7 @@ export default function PlaylistsPage() {
                 </div>
                 <RoleGate permission="music:library">
                   <div className="flex justify-end gap-1">
+                    <RenamePlaylistDialog playlist={playlist} />
                     <PlaylistAccessDialog playlist={playlist} />
                     <Button variant="ghost" size="icon-sm" onClick={() => duplicate.mutate(playlist.id)}>
                       <Copy className="size-3.5" />

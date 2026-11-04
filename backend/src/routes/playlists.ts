@@ -128,6 +128,7 @@ export default async function playlistsRoutes(app: FastifyInstance) {
       const existing = await scopedPlaylist(scope, request.params.id)
       if (!canMutateOwned(scope, existing.organizationId)) throw notFound("Playlist")
       const { name, description, trackIds } = request.body
+      if (name !== undefined && name !== existing.name && !scope.isSuperAdmin) throw forbidden()
       const playlist = await prisma.playlist.update({ where: { id: existing.id }, data: { name, description } })
       if (trackIds) await replaceTrackIds(playlist.id, trackIds)
       return reply.send(toPlaylist(playlist, trackIds ?? (await withTrackIds(playlist.id))))
