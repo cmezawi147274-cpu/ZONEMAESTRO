@@ -665,6 +665,7 @@ export default async function agentRoutes(app: FastifyInstance) {
       const localZoneId = str(z, "localZoneId", "id", "zoneId")
       const name = str(z, "name") ?? "Zone"
       if (!localZoneId) continue
+      if (localZoneId.startsWith("cmmp-clock-")) continue
 
       const playbackRaw = str(z, "playbackState")?.toUpperCase()
       const playbackState = (playbackRaw && ZONE_STATE_MAP[playbackRaw]) || undefined
