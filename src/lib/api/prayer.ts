@@ -7,7 +7,17 @@ import { readEffectivePrayerConfig, writePrayerConfig } from "@/lib/prayer/confi
 import { cacheKey, getCachedTimings, setCachedTimings } from "@/lib/prayer/cache"
 import { fetchPrayerTimings } from "@/lib/prayer/aladhan"
 import { calendarDateKey, todayInTimeZone } from "@/lib/prayer/timezone-math"
-import type { PrayerConfig, PrayerLocation, PrayerTimesToday, PrayerTimesTodayResponse } from "@/lib/api/types"
+import type { PrayerName } from "@/lib/constants"
+import type {
+  PrayerConfig,
+  PrayerLocation,
+  PrayerSettings,
+  PrayerTimesToday,
+  PrayerTimesTodayResponse,
+  ServerPrayerSettings,
+} from "@/lib/api/types"
+
+const mockServerPrayers = new Map<string, { prayers: Record<PrayerName, PrayerSettings>; updatedAt: string }>()
 
 export const prayerApi = {
   /** Returns the config with `location` always resolved to whatever's
@@ -49,6 +59,50 @@ export const prayerApi = {
       return saved
     }
     return apiClient.put<PrayerConfig>("/prayer/config", config)
+  },
+
+  async getServerPrayer(serverId: string): Promise<ServerPrayerSettings> {
+    if (isMockMode) {
+      await delay(150)
+      const organizationPrayers = readEffectivePrayerConfig().prayers
+      const own = mockServerPrayers.get(serverId)
+      return {
+        custom: !!own,
+        prayers: own?.prayers ?? organizationPrayers,
+        organizationPrayers,
+        updatedAt: own?.updatedAt ?? null,
+      }
+    }
+    return apiClient.get<ServerPrayerSettings>(`/servers/${serverId}/prayer`)
+  },
+
+  async updateServerPrayer(serverId: string, prayers: Record<PrayerName, PrayerSettings>): Promise<ServerPrayerSettings> {
+    if (isMockMode) {
+      await delay(300)
+      mockServerPrayers.set(serverId, { prayers: structuredClone(prayers), updatedAt: new Date().toISOString() })
+      return prayerApi.getServerPrayer(serverId)
+    }
+    return apiClient.put<ServerPrayerSettings>(`/servers/${serverId}/prayer`, { prayers })
+  },
+
+  async resetServerPrayer(serverId: string): Promise<void> {
+    if (isMockMode) {
+      await delay(300)
+      mockServerPrayers.delete(serverId)
+      return
+    }
+    await apiClient.delete(`/servers/${serverId}/prayer`)
+  },
+
+  async listServerOverrides(): Promise<{ id: string; name: string }[]> {
+    if (isMockMode) {
+      await delay(150)
+      return store.servers
+        .filter((s) => mockServerPrayers.has(s.id))
+        .map((s) => ({ id: s.id, name: s.name }))
+        .sort((a, b) => a.name.localeCompare(b.name))
+    }
+    return apiClient.get<{ id: string; name: string }[]>("/prayer/server-overrides")
   },
 
   listCalculationMethods() {

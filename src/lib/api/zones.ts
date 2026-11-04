@@ -55,6 +55,7 @@ export const zonesApi = {
       await delay(300)
       const zone = store.zones.find((z) => z.id === id)
       if (!zone) throw new Error("Zone not found")
+      if (zone.leaderZoneId) throw new Error(`This zone follows ${zone.leaderZoneName}.`)
       // Same apply-now-or-error contract as transport commands — not a
       // silent store write regardless of whether the server can act on it.
       const server = store.servers.find((s) => s.id === zone.serverId)
@@ -80,6 +81,7 @@ export const zonesApi = {
       await delay(300)
       const zone = store.zones.find((z) => z.id === id)
       if (!zone) throw new Error("Zone not found")
+      if (zone.leaderZoneId) throw new Error(`This zone follows ${zone.leaderZoneName}.`)
       const server = store.servers.find((s) => s.id === zone.serverId)
       if (!server || server.status === "OFFLINE" || server.status === "UNKNOWN") {
         throw new Error(`${server?.name ?? "Server"} is offline — playlist not removed.`)
@@ -116,6 +118,9 @@ export const zonesApi = {
     if (isMockMode) {
       await delay(300)
       store.zones = store.zones.filter((z) => z.id !== id)
+      store.zones.forEach((z) => {
+        if (z.leaderZoneId === id) Object.assign(z, { leaderZoneId: null, leaderZoneName: null })
+      })
       return
     }
     await apiClient.delete(`/zones/${id}`)

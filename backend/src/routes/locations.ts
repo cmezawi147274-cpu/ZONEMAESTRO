@@ -3,7 +3,7 @@ import { prisma } from "../lib/db.js"
 import { toLocation } from "../lib/serialize.js"
 import { requireAuth, requireUser, tenantScope } from "../lib/auth-context.js"
 import { can } from "../lib/rbac.js"
-import { forbidden, notFound } from "../lib/http-error.js"
+import { badRequest, forbidden, notFound } from "../lib/http-error.js"
 import { audit } from "../lib/audit.js"
 
 async function withCounts(loc: { id: string }) {
@@ -91,10 +91,16 @@ export default async function locationsRoutes(app: FastifyInstance) {
     const user = requireUser(request)
     if (!can(user.role, "location:write")) throw forbidden()
     const scope = tenantScope(request)
+    if (!scope.isSuperAdmin) throw forbidden()
     const existing = await prisma.location.findUnique({ where: { id: request.params.id } })
     if (!existing) throw notFound("Location")
-    if (!scope.isSuperAdmin && existing.organizationId !== scope.organizationId) throw notFound("Location")
-    await prisma.location.delete({ where: { id: existing.id } })
+    const userCount = await prisma.user.count({ where: { locationId: existing.id, role: { in: ["VIEWER", "LOCATION_MANAGER"] } } })
+    if (userCount > 0) throw badRequest(`This location still has ${userCount} user${userCount === 1 ? "" : "s"}. Move or delete them on the Users page first.`)
+    const servers = await prisma.musicServer.findMany({ where: { locationId: existing.id }, select: { id: true } })
+    await prisma.$transaction([
+      prisma.location.delete({ where: { id: existing.id } }),
+      prisma.deletedServerTombstone.createMany({ data: servers.map((s) => ({ id: s.id })), skipDuplicates: true }),
+    ])
     await audit(request, { action: "location.delete", targetType: "Location", targetId: existing.id, summary: `Deleted location "${existing.name}".`, metadata: { organizationId: existing.organizationId } })
     return reply.status(204).send()
   })

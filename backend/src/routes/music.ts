@@ -26,7 +26,7 @@ import { audit } from "../lib/audit.js"
  * volume and served it back over /media/music/. An allowlist keeps that
  * surface to audio.
  */
-const ALLOWED_AUDIO = new Map<string, string>([
+export const ALLOWED_AUDIO = new Map<string, string>([
   [".mp3", "audio/mpeg"],
   [".wav", "audio/wav"],
   [".flac", "audio/flac"],
@@ -36,7 +36,7 @@ const ALLOWED_AUDIO = new Map<string, string>([
   [".aac", "audio/aac"],
 ])
 
-const ALLOWED_EXT_LIST = Array.from(ALLOWED_AUDIO.keys()).join(", ")
+export const ALLOWED_EXT_LIST = Array.from(ALLOWED_AUDIO.keys()).join(", ")
 
 /** Page size when the caller doesn't ask for one. Every list route here was
  * previously unbounded — a growing library meant an ever-larger response and
@@ -73,7 +73,7 @@ export default async function musicRoutes(app: FastifyInstance) {
     const user = requireUser(request)
     if (!can(user.role, "music:read")) throw forbidden()
     const folders = await prisma.musicFolder.findMany({
-      where: libraryReadWhere(tenantScope(request)),
+      where: { AND: [libraryReadWhere(tenantScope(request)), { hidden: false }] },
       orderBy: { createdAt: "asc" },
     })
     return reply.send(folders.map(toMusicFolder))
@@ -97,7 +97,7 @@ export default async function musicRoutes(app: FastifyInstance) {
     const name = request.body?.name?.trim()
     if (!name) throw badRequest("A folder name is required.")
     const existing = await prisma.musicFolder.findUnique({ where: { id: request.params.id } })
-    if (!existing) throw notFound("Folder")
+    if (!existing || existing.hidden) throw notFound("Folder")
     if (!canMutateOwned(tenantScope(request), existing.organizationId)) throw notFound("Folder")
     const folder = await prisma.musicFolder.update({ where: { id: existing.id }, data: { name } })
     return reply.send(toMusicFolder(folder))
@@ -107,7 +107,7 @@ export default async function musicRoutes(app: FastifyInstance) {
     const user = requireUser(request)
     if (!can(user.role, "music:upload")) throw forbidden()
     const existing = await prisma.musicFolder.findUnique({ where: { id: request.params.id } })
-    if (!existing) throw notFound("Folder")
+    if (!existing || existing.hidden) throw notFound("Folder")
     if (!canMutateOwned(tenantScope(request), existing.organizationId)) throw notFound("Folder")
     // Tracks in this folder are never deleted — the FK just falls back to
     // null (Prisma schema: Track.folder onDelete: SetNull) and they show up
@@ -134,6 +134,8 @@ export default async function musicRoutes(app: FastifyInstance) {
       if (ids) {
         const wanted = ids.split(",").map((x) => x.trim()).filter(Boolean).slice(0, MAX_LIMIT)
         filters.push({ id: { in: wanted } })
+      } else {
+        filters.push({ OR: [{ folderId: null }, { folder: { hidden: false } }] })
       }
       if (genre && genre !== "all") filters.push({ genre })
       if (search) {
@@ -233,7 +235,7 @@ export default async function musicRoutes(app: FastifyInstance) {
     let folderId: string | null = null
     if (fields.folderId) {
       const folder = await prisma.musicFolder.findUnique({ where: { id: fields.folderId } })
-      if (!folder) throw notFound("Folder")
+      if (!folder || folder.hidden) throw notFound("Folder")
       if (!canMutateOwned(scope, folder.organizationId)) throw notFound("Folder")
       folderId = folder.id
     }
@@ -305,11 +307,12 @@ export default async function musicRoutes(app: FastifyInstance) {
     if (body.album !== undefined) data.album = body.album
     if (body.genre !== undefined) data.genre = body.genre
     if (body.folderId !== undefined) {
+      if (existing.folderId && (await prisma.musicFolder.findUnique({ where: { id: existing.folderId } }))?.hidden) throw notFound("Folder")
       if (body.folderId === null) {
         data.folderId = null
       } else {
         const folder = await prisma.musicFolder.findUnique({ where: { id: body.folderId } })
-        if (!folder) throw notFound("Folder")
+        if (!folder || folder.hidden) throw notFound("Folder")
         if (!canMutateOwned(scope, folder.organizationId)) throw notFound("Folder")
         data.folderId = folder.id
       }

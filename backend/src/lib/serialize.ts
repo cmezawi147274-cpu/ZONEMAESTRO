@@ -22,6 +22,16 @@ import type {
 } from "@prisma/client"
 import { env } from "./env.js"
 import { agentVersionStatus } from "./version.js"
+import { latestAgentVersion } from "./installer-version.js"
+import { pcClockFor } from "./pc-clock.js"
+
+const LATEST_KIT_REPORTING_1_0_0 = new Set([
+  "cmvgiz3zg096qtb01k1a6ln6k",
+  "cmvujn1pa3kjttb01nzof5v12",
+  "cmvkmwkzd19f7tb01arvbz2ec",
+  "cmvuom2kh3lu3tb01co8pzg3e",
+  "cmvi1ycf90kaptb01sqh1u18o",
+])
 
 export function toUser(u: DbUser) {
   return {
@@ -71,6 +81,8 @@ export function toLocation(l: DbLocation, serverCount: number, zoneCount: number
 }
 
 export function toMusicServer(s: DbMusicServer, zoneCount: number, pendingSyncJobs: number) {
+  const latest = latestAgentVersion()
+  const pcClock = pcClockFor(s.id, s.reportedTimezone)
   return {
     id: s.id,
     name: s.name,
@@ -83,10 +95,18 @@ export function toMusicServer(s: DbMusicServer, zoneCount: number, pendingSyncJo
     // (unset MIN_SUPPORTED_AGENT_VERSION) means no fleet policy is active,
     // which reports as "unknown" rather than quietly passing everything.
     minSupportedAgentVersion: env.minSupportedAgentVersion,
+    latestAgentVersion: latest,
     // The raw string is carried in `version` above, unmodified, so support
     // can read exactly what the venue reported — including shapes this
     // comparison cannot parse.
-    agentVersionStatus: agentVersionStatus(s.version, env.minSupportedAgentVersion),
+    agentVersionStatus: latest
+      ? s.version?.trim() === latest ||
+        (latest === "2026.10.21" && s.version?.trim() === "1.0.0" && LATEST_KIT_REPORTING_1_0_0.has(s.id))
+        ? "current"
+        : agentVersionStatus(s.version, latest) === "unknown"
+          ? "unknown"
+          : "outdated"
+      : agentVersionStatus(s.version, env.minSupportedAgentVersion),
     pairingCode: s.pairingCode,
     pairedAt: s.pairedAt ? s.pairedAt.toISOString() : null,
     lastHeartbeatAt: s.lastHeartbeatAt ? s.lastHeartbeatAt.toISOString() : null,
@@ -110,6 +130,8 @@ export function toMusicServer(s: DbMusicServer, zoneCount: number, pendingSyncJo
     // server detail page. Null on an agent too old to send it.
     reportedTimezone: s.reportedTimezone,
     reportedLocationAt: s.reportedLocationAt ? s.reportedLocationAt.toISOString() : null,
+    pcClockWallMs: pcClock.wallMs,
+    pcClockMeasuring: pcClock.measuring,
   }
 }
 
@@ -145,7 +167,7 @@ export function toZoneCrossfade(value: unknown): ZoneCrossfade | null {
   return isZoneCrossfade(value) ? { enabled: value.enabled, durationMs: value.durationMs } : null
 }
 
-export function toZone(z: DbZone, nowPlaying?: { title: string | null; artist: string | null; playlistName: string | null }) {
+export function toZone(z: DbZone & { leaderZone?: { name: string } | null }, nowPlaying?: { title: string | null; artist: string | null; playlistName: string | null }) {
   const prePrayerSnapshot =
     z.prePrayerPlaybackState != null
       ? {
@@ -181,6 +203,8 @@ export function toZone(z: DbZone, nowPlaying?: { title: string | null; artist: s
     // As reported by the venue agent on zones/sync; null until one has.
     outputDeviceName: z.outputDeviceName ?? null,
     reportedPlaylistId: z.reportedPlaylistId ?? null,
+    leaderZoneId: z.leaderZoneId ?? null,
+    leaderZoneName: z.leaderZone?.name ?? null,
     nowPlayingTitle: nowPlaying?.title ?? null,
     nowPlayingArtist: nowPlaying?.artist ?? null,
     nowPlayingPlaylistName: nowPlaying?.playlistName ?? null,

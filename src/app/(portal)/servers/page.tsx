@@ -87,20 +87,29 @@ export default function ServersPage() {
                             passing: a version nobody can parse is not
                             evidence that the venue is fine. The raw string
                             is always rendered above, whatever its shape. */}
+                        {server.latestAgentVersion && server.agentVersionStatus === "current" && (
+                          <Badge
+                            variant="outline"
+                            className="border-emerald-500/40 text-emerald-600 dark:text-emerald-500"
+                            title={`Latest version (${server.latestAgentVersion})`}
+                          >
+                            Latest
+                          </Badge>
+                        )}
                         {server.agentVersionStatus === "outdated" && (
                           <Badge
                             variant="outline"
                             className="border-amber-500/40 text-amber-600 dark:text-amber-500"
-                            title={`Below the minimum supported agent version (${server.minSupportedAgentVersion})`}
+                            title={server.latestAgentVersion ? `Latest version is ${server.latestAgentVersion}` : `Below the minimum supported agent version (${server.minSupportedAgentVersion})`}
                           >
                             Outdated
                           </Badge>
                         )}
-                        {server.agentVersionStatus === "unknown" && server.minSupportedAgentVersion && (
+                        {server.agentVersionStatus === "unknown" && (server.latestAgentVersion || server.minSupportedAgentVersion) && (
                           <Badge
                             variant="outline"
                             className="text-muted-foreground"
-                            title={`Cannot be compared against the minimum supported version (${server.minSupportedAgentVersion})`}
+                            title={server.latestAgentVersion ? `Cannot be compared against the latest version (${server.latestAgentVersion})` : `Cannot be compared against the minimum supported version (${server.minSupportedAgentVersion})`}
                           >
                             Unknown
                           </Badge>

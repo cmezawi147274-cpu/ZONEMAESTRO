@@ -51,6 +51,9 @@ export function useDeleteOrganization() {
     mutationFn: (id: string) => organizationsApi.remove(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["organizations"] })
+      qc.invalidateQueries({ queryKey: ["locations"] })
+      qc.invalidateQueries({ queryKey: ["servers"] })
+      qc.invalidateQueries({ queryKey: ["zones"] })
       toast.success("Organization deleted")
     },
     onError: (e: Error) => toast.error(e.message),

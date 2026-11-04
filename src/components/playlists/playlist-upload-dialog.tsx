@@ -1,0 +1,221 @@
+"use client"
+
+import { useRef, useState } from "react"
+import { useQueryClient } from "@tanstack/react-query"
+import { UploadCloud, Loader2, X, Music2, CheckCircle2, XCircle } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Progress } from "@/components/ui/progress"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { playlistsApi } from "@/lib/api/playlists"
+import { useAuth } from "@/hooks/use-auth"
+import { GENRES } from "@/lib/constants"
+import type { Playlist } from "@/lib/api/types"
+import { toast } from "sonner"
+
+interface PendingUpload {
+  id: string
+  file: File
+  title: string
+  artist: string
+  album: string
+  genre: string
+  progress: number
+  status: "pending" | "uploading" | "done" | "error"
+}
+
+function titleFromFilename(name: string) {
+  return name.replace(/\.[^/.]+$/, "").replace(/[-_]+/g, " ")
+}
+
+/** Same control as components/music/upload-dialog.tsx, but it uploads onto
+ * this one playlist via POST /playlists/:id/upload and never into the music
+ * library. */
+export function PlaylistUploadDialog({ playlist }: { playlist: Playlist }) {
+  const [open, setOpen] = useState(false)
+  const [items, setItems] = useState<PendingUpload[]>([])
+  const [uploading, setUploading] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const { user } = useAuth()
+  const queryClient = useQueryClient()
+
+  if (!playlist.organizationId || (user?.role !== "SUPER_ADMIN" && playlist.organizationId !== user?.organizationId)) return null
+
+  function addFiles(files: FileList | null) {
+    if (!files) return
+    const next: PendingUpload[] = Array.from(files).map((file) => ({
+      id: `${file.name}-${file.size}-${Math.random().toString(36).slice(2, 8)}`,
+      file,
+      title: titleFromFilename(file.name),
+      artist: "",
+      album: "",
+      genre: GENRES[0],
+      progress: 0,
+      status: "pending",
+    }))
+    setItems((prev) => [...prev, ...next])
+  }
+
+  function updateItem(id: string, patch: Partial<PendingUpload>) {
+    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, ...patch } : i)))
+  }
+
+  function removeItem(id: string) {
+    setItems((prev) => prev.filter((i) => i.id !== id))
+  }
+
+  async function uploadAll() {
+    setUploading(true)
+    let failed = 0
+    for (const item of items) {
+      if (item.status === "done") continue
+      updateItem(item.id, { status: "uploading" })
+      try {
+        await playlistsApi.upload(
+          playlist.id,
+          item.file,
+          {
+            title: item.title || item.file.name,
+            artist: item.artist || "Unknown Artist",
+            album: item.album || "Unknown Album",
+            genre: item.genre,
+          },
+          (percent) => updateItem(item.id, { progress: percent })
+        )
+        updateItem(item.id, { status: "done", progress: 100 })
+      } catch (e) {
+        failed++
+        updateItem(item.id, { status: "error" })
+        toast.error(`${item.file.name}: ${e instanceof Error ? e.message : "Upload failed"}`)
+      }
+    }
+    setUploading(false)
+    queryClient.invalidateQueries({ queryKey: ["playlists"] })
+    queryClient.invalidateQueries({ queryKey: ["music"] })
+    if (failed === 0) toast.success(`Uploaded ${items.length} track(s) to this playlist`)
+  }
+
+  function reset() {
+    setItems([])
+    setUploading(false)
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (!next) reset()
+      }}
+    >
+      <DialogTrigger
+        render={
+          <Button size="sm">
+            <UploadCloud className="size-4" /> Upload Music
+          </Button>
+        }
+      />
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Upload Music</DialogTitle>
+          <DialogDescription>
+            Add tracks to this playlist only. They are not added to the music library.
+          </DialogDescription>
+        </DialogHeader>
+
+        <input
+          ref={inputRef}
+          type="file"
+          accept=".mp3,.wav,.flac,.ogg,.oga,.m4a,.aac,audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/ogg,audio/mp4,audio/aac"
+          multiple
+          className="hidden"
+          onChange={(e) => addFiles(e.target.files)}
+        />
+
+        <button
+          type="button"
+          onClick={() => inputRef.current?.click()}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            e.preventDefault()
+            addFiles(e.dataTransfer.files)
+          }}
+          className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed p-6 text-center transition-colors hover:bg-muted/40"
+        >
+          <UploadCloud className="size-6 text-muted-foreground" />
+          <p className="text-sm font-medium">Click to select audio files</p>
+          <p className="text-xs text-muted-foreground">MP3, WAV, FLAC — multiple files supported</p>
+        </button>
+
+        {items.length > 0 && (
+          <div className="max-h-72 space-y-3 overflow-y-auto pr-1">
+            {items.map((item) => (
+              <div key={item.id} className="space-y-2 rounded-lg border p-3">
+                <div className="flex items-center gap-2">
+                  <Music2 className="size-4 shrink-0 text-muted-foreground" />
+                  <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{item.file.name}</p>
+                  {item.status === "done" && <CheckCircle2 className="size-4 shrink-0 text-emerald-500" />}
+                  {item.status === "error" && <XCircle className="size-4 shrink-0 text-red-500" />}
+                  {item.status === "pending" && (
+                    <Button variant="ghost" size="icon-xs" onClick={() => removeItem(item.id)}>
+                      <X className="size-3.5" />
+                    </Button>
+                  )}
+                </div>
+                {item.status === "pending" ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    <Input
+                      placeholder="Title"
+                      value={item.title}
+                      onChange={(e) => updateItem(item.id, { title: e.target.value })}
+                    />
+                    <Input
+                      placeholder="Artist"
+                      value={item.artist}
+                      onChange={(e) => updateItem(item.id, { artist: e.target.value })}
+                    />
+                    <Input
+                      placeholder="Album"
+                      value={item.album}
+                      onChange={(e) => updateItem(item.id, { album: e.target.value })}
+                    />
+                    <Select value={item.genre} onValueChange={(v) => v && updateItem(item.id, { genre: v })}>
+                      <SelectTrigger className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {GENRES.map((g) => (
+                          <SelectItem key={g} value={g}>
+                            {g}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : (
+                  <Progress value={item.progress} className="h-1.5" />
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button onClick={uploadAll} disabled={items.length === 0 || uploading}>
+            {uploading && <Loader2 className="size-4 animate-spin" />}
+            Upload {items.length > 0 ? `${items.length} track(s)` : ""}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}

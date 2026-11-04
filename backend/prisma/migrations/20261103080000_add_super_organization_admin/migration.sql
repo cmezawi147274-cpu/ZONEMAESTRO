@@ -1,0 +1,5 @@
+-- AlterEnum
+ALTER TYPE "Role" ADD VALUE 'SUPER_ORGANIZATION_ADMIN';
+
+-- AlterTable
+ALTER TABLE "MusicFolder" ADD COLUMN     "hidden" BOOLEAN NOT NULL DEFAULT false;

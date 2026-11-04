@@ -1,7 +1,8 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { Play, Pause, Square, SkipBack, SkipForward, Moon, ListMusic, ListX, CalendarClock, SlidersHorizontal, Trash2, Blend, Speaker } from "lucide-react"
+import { useQueryClient } from "@tanstack/react-query"
+import { Play, Pause, Square, SkipBack, SkipForward, Moon, ListMusic, ListX, CalendarClock, SlidersHorizontal, Trash2, Blend, Speaker, AudioLines, Layers, Link2 } from "lucide-react"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -26,14 +27,16 @@ import { useAuth } from "@/hooks/use-auth"
 import { useZoneControls, useAssignZonePlaylist, useUnassignZonePlaylist, useZonePlaylists, useDeleteZone, useSetZoneCrossfade } from "@/hooks/use-zones"
 import { useSetZonePrayerParticipation } from "@/hooks/use-prayer"
 import { useSchedules } from "@/hooks/use-schedules"
+import { useSuperZones } from "@/hooks/use-super-zones"
 import { useTracksByIds } from "@/hooks/use-music"
 import { ZonePlaylistDialog } from "@/components/zones/zone-playlist-dialog"
 import { ZoneScheduleDialog } from "@/components/zones/zone-schedule-dialog"
 import { ZoneVolumeRow } from "@/components/zones/zone-volume-row"
 import { ZoneEqualizerDialog, equalizerSummary } from "@/components/zones/zone-equalizer-dialog"
 import { formatRelativeTime } from "@/lib/format"
+import { defaultEqualizer } from "@/lib/equalizer/presets"
 import { PRAYER_LABELS, PRAYER_NAMES } from "@/lib/constants"
-import type { MusicServer, PrayerTimesToday, Zone } from "@/lib/api/types"
+import type { MusicServer, PrayerTimesToday, Zone, ZoneEqualizerSettings } from "@/lib/api/types"
 
 /** Today's prayer times for the zone's own Location, computed by the
  * caller (see src/app/(portal)/zones/page.tsx) — one fetch per unique
@@ -86,6 +89,23 @@ export function ZoneCard({
   // playlists/tracks above, and the block below stays behind the same
   // RoleGate so it's not offered without the data to back it.
   const { data: schedules } = useSchedules({ zoneId: zone.id }, { enabled: canReadSchedule })
+  const { data: superZones } = useSuperZones(zone.serverId)
+  const isSuperZone = !!superZones?.groups.some((g) => g.leaderZoneId === zone.id)
+  const leaderName = zone.leaderZoneId ? (zone.leaderZoneName ?? "its super zone") : null
+  const volumeLocked = !!zone.leaderZoneId && !!superZones?.groups.some((g) => g.leaderZoneId === zone.leaderZoneId && g.copyVolume)
+  const qc = useQueryClient()
+  const [eqSaves, setEqSaves] = useState(0)
+  const [monoHeld, setMonoHeld] = useState<boolean | null>(null)
+  const mono = zone.equalizer?.mono === true
+  const setEqualizer = async (equalizer: ZoneEqualizerSettings) => {
+    setEqSaves((n) => n + 1)
+    try {
+      await controls.setEqualizer(equalizer)
+    } finally {
+      await qc.invalidateQueries({ queryKey: ["zones"] }, { cancelRefetch: false })
+      setEqSaves((n) => n - 1)
+    }
+  }
   const [localVolume, setLocalVolume] = useState(zone.volume)
   const [draggingVolume, setDraggingVolume] = useState(false)
   const [heldVolume, setHeldVolume] = useState<{ target: number; before: number } | null>(null)
@@ -188,6 +208,18 @@ export function ZoneCard({
           </Badge>
         )}
 
+        {leaderName && (
+          <Badge variant="outline" className="gap-1 border-sky-500/20 bg-sky-500/10 text-sky-600 dark:text-sky-400">
+            <Link2 className="size-3" /> Following {leaderName}
+          </Badge>
+        )}
+
+        {isSuperZone && (
+          <Badge variant="outline" className="gap-1 border-sky-500/20 bg-sky-500/10 text-sky-600 dark:text-sky-400">
+            <Layers className="size-3" /> Super zone
+          </Badge>
+        )}
+
         {todayPrayerTimes && (
           <div className="rounded-md border px-2.5 py-1.5 text-[11px]">
             {todayPrayerTimes.status === "ready" && todayPrayerTimes.times ? (
@@ -230,7 +262,7 @@ export function ZoneCard({
               <p className="text-sm text-muted-foreground">No playlist assigned</p>
             )}
           </div>
-          {playlist && (
+          {playlist && !leaderName && (
             <ZonePlaylistDialog
               zone={zone}
               playlist={playlist}
@@ -243,6 +275,12 @@ export function ZoneCard({
           )}
         </div>
 
+        {leaderName && (
+          <p className="rounded-md border px-2.5 py-1.5 text-center text-xs text-muted-foreground">
+            Controlled by {leaderName}
+          </p>
+        )}
+
         <RoleGate permission="zone:control">
           {/* QA review Option 3: previously just `disabled={offline}` with
               no explanation — indistinguishable from "broken" during a real
@@ -253,7 +291,7 @@ export function ZoneCard({
               gated on `offline`, not `controls.isPending` — a fired-in-
               flight command needs no explanation, it's expected to resolve
               on its own. */}
-          {offline ? (
+          {leaderName ? null : offline ? (
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -304,60 +342,66 @@ export function ZoneCard({
             </div>
           )}
 
-          <ZoneVolumeRow
-            volume={localVolume}
-            muted={zone.muted}
-            offline={offline}
-            onMuteToggle={() => (zone.muted ? controls.unmute() : controls.mute())}
-            onValueChange={(next) => {
-              setDraggingVolume(true)
-              setLocalVolume(next)
-            }}
-            onValueCommitted={(next) => {
-              // Stay "dragging" (i.e. keep showing the just-set value
-              // rather than following the query cache) until the command
-              // actually resolves. Clearing this immediately re-armed the
-              // effect above while zone.volume in the cache was still the
-              // *old* value — the round-trip to the agent and back is not
-              // instant — so the slider visibly snapped back to the old
-              // value and then jumped to the new one a moment later.
-              setHeldVolume({ target: next, before: zone.volume })
-              controls
-                .setVolume(next)
-                .catch(() => {
-                  setHeldVolume(null)
-                  setLocalVolume(zone.volume)
-                })
-                .finally(() => setDraggingVolume(false))
-            }}
-          />
+          {volumeLocked ? null : (
+            <ZoneVolumeRow
+              volume={localVolume}
+              muted={zone.muted}
+              offline={offline}
+              onMuteToggle={() => (zone.muted ? controls.unmute() : controls.mute())}
+              onValueChange={(next) => {
+                setDraggingVolume(true)
+                setLocalVolume(next)
+              }}
+              onValueCommitted={(next) => {
+                // Stay "dragging" (i.e. keep showing the just-set value
+                // rather than following the query cache) until the command
+                // actually resolves. Clearing this immediately re-armed the
+                // effect above while zone.volume in the cache was still the
+                // *old* value — the round-trip to the agent and back is not
+                // instant — so the slider visibly snapped back to the old
+                // value and then jumped to the new one a moment later.
+                setHeldVolume({ target: next, before: zone.volume })
+                controls
+                  .setVolume(next)
+                  .catch(() => {
+                    setHeldVolume(null)
+                    setLocalVolume(zone.volume)
+                  })
+                  .finally(() => setDraggingVolume(false))
+              }}
+            />
+          )}
         </RoleGate>
 
         <RoleGate permission="zone:control">
           <ZoneEqualizerDialog
             zone={zone}
-            controls={controls}
+            controls={{ setEqualizer }}
             volumeRow={
-              <ZoneVolumeRow
-                volume={localVolume}
-                muted={zone.muted}
-                offline={offline}
-                onMuteToggle={() => (zone.muted ? controls.unmute() : controls.mute())}
-                onValueChange={(next) => {
-                  setDraggingVolume(true)
-                  setLocalVolume(next)
-                }}
-                onValueCommitted={(next) => {
-                  setHeldVolume({ target: next, before: zone.volume })
-                  controls
-                    .setVolume(next)
-                    .catch(() => {
-                      setHeldVolume(null)
-                      setLocalVolume(zone.volume)
-                    })
-                    .finally(() => setDraggingVolume(false))
-                }}
-              />
+              volumeLocked ? (
+                <p className="text-xs text-white/60">Controlled by {leaderName}</p>
+              ) : (
+                <ZoneVolumeRow
+                  volume={localVolume}
+                  muted={zone.muted}
+                  offline={offline}
+                  onMuteToggle={() => (zone.muted ? controls.unmute() : controls.mute())}
+                  onValueChange={(next) => {
+                    setDraggingVolume(true)
+                    setLocalVolume(next)
+                  }}
+                  onValueCommitted={(next) => {
+                    setHeldVolume({ target: next, before: zone.volume })
+                    controls
+                      .setVolume(next)
+                      .catch(() => {
+                        setHeldVolume(null)
+                        setLocalVolume(zone.volume)
+                      })
+                      .finally(() => setDraggingVolume(false))
+                  }}
+                />
+              )
             }
             trigger={
               // Gated on `offline`, same as volume/transport/playlist above
@@ -380,7 +424,7 @@ export function ZoneCard({
               // is the safe fallback for this one trigger-cloned case.
               <button
                 type="button"
-                disabled={offline}
+                disabled={offline || monoHeld !== null}
                 title={offline ? "Server offline — equalizer unavailable" : undefined}
                 className="flex min-h-11 w-full items-center justify-between rounded-md border px-2.5 py-1.5 text-left text-[11px] transition-colors hover:bg-muted/40 disabled:pointer-events-none disabled:opacity-50"
               >
@@ -394,15 +438,35 @@ export function ZoneCard({
           />
         </RoleGate>
 
+        <RoleGate permission="zone:control">
+          <div className="flex items-center justify-between rounded-md border px-2.5 py-1.5 text-[11px]">
+            <span className="flex items-center gap-1.5 text-muted-foreground">
+              <AudioLines className="size-3" />
+              <span className="font-medium">Mono</span>
+            </span>
+            <Switch
+              checked={monoHeld ?? mono}
+              disabled={offline || controls.isPending || eqSaves > 0}
+              aria-label="Mono"
+              onCheckedChange={(checked) => {
+                setMonoHeld(checked)
+                setEqualizer({ ...(zone.equalizer ?? defaultEqualizer()), mono: checked })
+                  .catch(() => {})
+                  .finally(() => setMonoHeld(null))
+              }}
+            />
+          </div>
+        </RoleGate>
+
         {/* Same permission PUT /zones/:id/crossfade checks. */}
         <RoleGate permission="zone:assign">
-          <ZoneCrossfadeRow zone={zone} />
+          {leaderName ? null : <ZoneCrossfadeRow zone={zone} />}
         </RoleGate>
 
         <RoleGate permission="zone:assign">
           {/* "No playlist assigned" only once the list has loaded, and never
               while the zone itself carries an assignment (currentPlaylistId). */}
-          {playlists && playlists.length > 0 ? (
+          {leaderName ? null : playlists && playlists.length > 0 ? (
             <div className="flex items-center gap-1">
               <Select
                 value={zone.currentPlaylistId ?? null}
@@ -471,6 +535,7 @@ export function ZoneCard({
                     {sortedSchedules.length > 3 && (
                       <p className="text-muted-foreground">+{sortedSchedules.length - 3} more</p>
                     )}
+                    {leaderName && <p className="text-sky-600 dark:text-sky-400">Paused while following {leaderName}</p>}
                   </div>
                 )}
               </button>

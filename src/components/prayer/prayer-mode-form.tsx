@@ -1,14 +1,15 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import Link from "next/link"
 import { Loader2, Save, Sunrise, MapPin, Building2 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
-import { Switch } from "@/components/ui/switch"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { CountryCityPicker } from "@/components/common/country-city-picker"
+import { PrayerSettingsRows } from "@/components/prayer/prayer-settings-rows"
 import { VenueLocationBadge, type VenueLocationState } from "@/components/common/status-badge"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { cn } from "@/lib/utils"
@@ -16,6 +17,7 @@ import {
   usePrayerConfig,
   useUpdatePrayerConfig,
   useTodayPrayerTimes,
+  useServerPrayerOverrides,
 } from "@/hooks/use-prayer"
 import { useLocations } from "@/hooks/use-locations"
 import { useAuth } from "@/hooks/use-auth"
@@ -29,6 +31,7 @@ export function PrayerModeForm() {
   const canManage = can("prayer:manage")
   const { data: savedConfig, isLoading } = usePrayerConfig()
   const update = useUpdatePrayerConfig()
+  const { data: customizedServers } = useServerPrayerOverrides()
   const { data: allLocations } = useLocations()
   const locationsWithGeo = (allLocations ?? []).filter((l) => l.latitude != null && l.longitude != null)
 
@@ -225,57 +228,27 @@ export function PrayerModeForm() {
           <CardTitle className="text-sm font-medium">Prayers</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          {PRAYER_NAMES.map((p) => {
-            const settings = config.prayers[p]
-            return (
-              <div key={p} className="flex flex-wrap items-center gap-3 rounded-lg border p-3 sm:flex-nowrap">
-                <div className="flex w-28 items-center gap-2 shrink-0">
-                  <Switch
-                    checked={settings.enabled}
-                    disabled={!canManage}
-                    onCheckedChange={(enabled) =>
-                      setConfig((prev) => ({ ...prev, prayers: { ...prev.prayers, [p]: { ...prev.prayers[p], enabled } } }))
-                    }
-                  />
-                  <span className="text-sm font-medium">{PRAYER_LABELS[p]}</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <Label className="text-xs text-muted-foreground">Offset (min)</Label>
-                  <Input
-                    type="number"
-                    className="w-20"
-                    value={settings.offsetMinutes}
-                    disabled={!settings.enabled || !canManage}
-                    onChange={(e) =>
-                      setConfig((prev) => ({
-                        ...prev,
-                        prayers: { ...prev.prayers, [p]: { ...prev.prayers[p], offsetMinutes: Number(e.target.value) || 0 } },
-                      }))
-                    }
-                  />
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <Label className="text-xs text-muted-foreground">Pause (min)</Label>
-                  <Input
-                    type="number"
-                    min={1}
-                    className="w-20"
-                    value={settings.pauseDurationMinutes}
-                    disabled={!settings.enabled || !canManage}
-                    onChange={(e) =>
-                      setConfig((prev) => ({
-                        ...prev,
-                        prayers: {
-                          ...prev.prayers,
-                          [p]: { ...prev.prayers[p], pauseDurationMinutes: Math.max(1, Number(e.target.value) || 1) },
-                        },
-                      }))
-                    }
-                  />
-                </div>
-              </div>
-            )
-          })}
+          <PrayerSettingsRows
+            prayers={config.prayers}
+            disabled={!canManage}
+            onChange={(p, patch) =>
+              setConfig((prev) => ({ ...prev, prayers: { ...prev.prayers, [p]: { ...prev.prayers[p], ...patch } } }))
+            }
+          />
+          {customizedServers && customizedServers.length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              These servers use their own settings:{" "}
+              {customizedServers.map((s, i) => (
+                <span key={s.id}>
+                  {i > 0 && ", "}
+                  <Link href={`/servers/${s.id}`} className="font-medium text-foreground underline-offset-4 hover:underline">
+                    {s.name}
+                  </Link>
+                </span>
+              ))}
+              .
+            </p>
+          )}
         </CardContent>
       </Card>
 

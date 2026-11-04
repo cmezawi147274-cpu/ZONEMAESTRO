@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { AddTracksDialog } from "@/components/playlists/add-tracks-dialog"
 import { AssignPlaylistDialog } from "@/components/playlists/assign-playlist-dialog"
+import { PlaylistUploadDialog } from "@/components/playlists/playlist-upload-dialog"
 import { usePlaylist, useUpdatePlaylistTracks, useRemoveTrackFromPlaylist } from "@/hooks/use-playlists"
 import { useTracksByIds } from "@/hooks/use-music"
 import { formatDuration } from "@/lib/format"
@@ -66,6 +67,7 @@ export default function PlaylistDetailPage(props: PageProps<"/playlists/[id]">) 
                 <Input placeholder="Search tracks" value={query} onChange={(e) => setQuery(e.target.value)} className="h-7 w-28 rounded-[min(var(--radius-md),12px)] border-border px-2.5 text-[0.8rem] sm:w-40 md:text-[0.8rem] dark:border-input" />
                 <AssignPlaylistDialog playlistId={playlist.id} />
                 <RoleGate permission="music:library"><AddTracksDialog playlist={playlist} /></RoleGate>
+                <RoleGate permission="playlist:upload"><PlaylistUploadDialog playlist={playlist} /></RoleGate>
               </div>
             </RoleGate>
           }

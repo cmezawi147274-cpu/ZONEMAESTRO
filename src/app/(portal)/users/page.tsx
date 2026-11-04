@@ -23,7 +23,7 @@ import type { User } from "@/lib/api/types"
 /** Mirrors backend/src/routes/users.ts RANK — client-side only for hiding
  * actions this account isn't allowed to use; the backend enforces it
  * regardless. */
-const RANK: Record<Role, number> = { SUPER_ADMIN: 3, ORGANIZATION_ADMIN: 2, LOCATION_MANAGER: 1, VIEWER: 0 }
+const RANK: Record<Role, number> = { SUPER_ADMIN: 3, ORGANIZATION_ADMIN: 2, LOCATION_MANAGER: 1, VIEWER: 0, SUPER_ORGANIZATION_ADMIN: 2 }
 
 export default function UsersPage() {
   const { data: users, isLoading } = useUsers()
@@ -36,7 +36,7 @@ export default function UsersPage() {
   // superior (same rule the invite dialog uses).
   const assignableRoles = ROLES.filter((r) => {
     if (currentUser?.role === "SUPER_ADMIN") return true
-    if (currentUser?.role === "ORGANIZATION_ADMIN") return r === "LOCATION_MANAGER" || r === "VIEWER"
+    if (currentUser?.role === "ORGANIZATION_ADMIN" || currentUser?.role === "SUPER_ORGANIZATION_ADMIN") return r === "LOCATION_MANAGER" || r === "VIEWER"
     return r === "VIEWER"
   })
   const canActOn = (target: User) => target.id !== currentUser?.id && (currentUser?.role === "SUPER_ADMIN" || RANK[target.role] < RANK[currentUser?.role ?? "VIEWER"])

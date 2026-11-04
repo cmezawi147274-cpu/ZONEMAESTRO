@@ -25,6 +25,8 @@ import usersRoutes from "./routes/users.js"
 import dashboardRoutes from "./routes/dashboard.js"
 import monitoringRoutes from "./routes/monitoring.js"
 import prayerRoutes from "./routes/prayer.js"
+import serverPrayerRoutes from "./routes/server-prayer.js"
+import superZonesRoutes from "./routes/super-zones.js"
 import downloadsRoutes from "./routes/downloads.js"
 import agentRoutes from "./routes/agent.js"
 import { attachMusicServerHub } from "./agent/signalrHub.js"
@@ -215,6 +217,8 @@ await app.register(
     await api.register(dashboardRoutes)
     await api.register(monitoringRoutes)
     await api.register(prayerRoutes)
+    await api.register(serverPrayerRoutes)
+    await api.register(superZonesRoutes)
     await api.register(downloadsRoutes)
     await api.register(import("./subscription/routes.js").catch(() => ({ default: async () => {} })))
   },

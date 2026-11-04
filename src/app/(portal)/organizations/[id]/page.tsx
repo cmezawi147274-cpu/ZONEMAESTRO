@@ -2,7 +2,8 @@
 
 import { use } from "react"
 import Link from "next/link"
-import { ArrowLeft, MapPin, ServerCog } from "lucide-react"
+import { useRouter } from "next/navigation"
+import { ArrowLeft, MapPin, ServerCog, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/common/page-header"
 import { EmptyState } from "@/components/common/empty-state"
 import { RoleGate } from "@/components/common/role-gate"
@@ -10,17 +11,30 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 import { CreateLocationDialog } from "@/components/locations/create-location-dialog"
-import { useOrganization } from "@/hooks/use-organizations"
+import { useOrganization, useDeleteOrganization } from "@/hooks/use-organizations"
 import { useLocations } from "@/hooks/use-locations"
 import { useServers } from "@/hooks/use-servers"
 import { formatDate } from "@/lib/format"
 
 export default function OrganizationDetailPage(props: PageProps<"/organizations/[id]">) {
   const { id } = use(props.params)
+  const router = useRouter()
   const { data: org, isLoading } = useOrganization(id)
   const { data: locations } = useLocations(id)
   const { data: servers } = useServers({ organizationId: id })
+  const deleteOrganization = useDeleteOrganization()
 
   if (isLoading) {
     return (
@@ -43,9 +57,42 @@ export default function OrganizationDetailPage(props: PageProps<"/organizations/
           title={org.name}
           description={`${org.contactName} · ${org.contactEmail}`}
           actions={
-            <RoleGate permission="location:write">
-              <CreateLocationDialog organizationId={org.id} />
-            </RoleGate>
+            <div className="flex items-center gap-2">
+              <RoleGate permission="location:write">
+                <CreateLocationDialog organizationId={org.id} />
+              </RoleGate>
+              <RoleGate permission="org:write">
+                <AlertDialog>
+                  <AlertDialogTrigger render={
+                    <Button variant="destructive" size="sm" disabled={deleteOrganization.isPending}>
+                      <Trash2 className="size-4" />
+                      Delete Organization
+                    </Button>
+                  } />
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Delete {org.name}?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        This permanently deletes {org.name} with all its locations, Music Servers, zones,
+                        schedules, playlists and music. Its venue PCs will be disconnected and must be
+                        paired again. An organization that still has users cannot be deleted, so move or
+                        delete its users first. This cannot be undone.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction
+                        variant="destructive"
+                        disabled={deleteOrganization.isPending}
+                        onClick={() => deleteOrganization.mutate(org.id, { onSuccess: () => router.push("/organizations") })}
+                      >
+                        Delete Organization
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              </RoleGate>
+            </div>
           }
         />
       </div>

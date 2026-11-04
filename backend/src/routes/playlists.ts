@@ -1,13 +1,19 @@
 import type { FastifyInstance } from "fastify"
+import fs from "node:fs"
+import path from "node:path"
+import { pipeline } from "node:stream/promises"
+import { parseFile } from "music-metadata"
 import { prisma } from "../lib/db.js"
-import { toPlaylist, toPlaylistAssignment } from "../lib/serialize.js"
+import { toPlaylist, toPlaylistAssignment, toTrack } from "../lib/serialize.js"
 import { requireAuth, requireUser, tenantScope, type TenantScope } from "../lib/auth-context.js"
 import { can } from "../lib/rbac.js"
-import { forbidden, notFound, badRequest } from "../lib/http-error.js"
+import { forbidden, notFound, badRequest, conflict } from "../lib/http-error.js"
 import { queuePlaylistTracksForServer } from "../lib/zone-effects.js"
 import { audit } from "../lib/audit.js"
 import { scopedPlaylist, scopedAssignmentTarget, canMutateOwned, assertPlaylistFitsZone } from "../lib/tenant.js"
 import type { PlaylistTargetType } from "@prisma/client"
+import { env } from "../lib/env.js"
+import { ALLOWED_AUDIO, ALLOWED_EXT_LIST } from "./music.js"
 
 async function withTrackIds(playlistId: string): Promise<string[]> {
   const rows = await prisma.playlistTrack.findMany({ where: { playlistId }, orderBy: { position: "asc" } })
@@ -40,6 +46,19 @@ async function resolvePlaylistOrgId(scope: TenantScope, requested: string | null
     if (!org) throw notFound("Organization")
   }
   return orgId
+}
+
+/** The organization's invisible DUMP library (a MusicFolder flagged
+ * `hidden`), created on first use. Playlist-only uploads are stored here so
+ * GET /music and GET /music/folders never list them. */
+async function dumpFolderId(organizationId: string): Promise<string> {
+  return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext('cmmp:dump-folder'), hashtext(${organizationId}))::text`
+    const existing = await tx.musicFolder.findFirst({ where: { organizationId, hidden: true }, select: { id: true } })
+    if (existing) return existing.id
+    const folder = await tx.musicFolder.create({ data: { name: "DUMP", organizationId, hidden: true }, select: { id: true } })
+    return folder.id
+  })
 }
 
 export default async function playlistsRoutes(app: FastifyInstance) {
@@ -185,6 +204,74 @@ export default async function playlistsRoutes(app: FastifyInstance) {
     return reply.send(toPlaylist(playlist, await withTrackIds(playlist.id)))
   })
 
+  app.post<{ Params: { id: string } }>("/playlists/:id/upload", async (request, reply) => {
+    const user = requireUser(request)
+    if (!can(user.role, "playlist:upload")) throw forbidden()
+    const scope = tenantScope(request)
+    const existingPlaylist = await scopedPlaylist(scope, request.params.id)
+    if (!existingPlaylist.organizationId || !canMutateOwned(scope, existingPlaylist.organizationId)) throw notFound("Playlist")
+    const organizationId = existingPlaylist.organizationId
+
+    const parts = request.parts()
+    let filePart: { filename: string; originalName: string; filePath: string; size: number } | null = null
+    const fields: Record<string, string> = {}
+
+    fs.mkdirSync(env.musicStorageDir, { recursive: true })
+
+    for await (const part of parts) {
+      if (part.type === "file") {
+        const ext = path.extname(part.filename).toLowerCase()
+        if (!ALLOWED_AUDIO.has(ext)) {
+          part.file.resume()
+          throw badRequest(`"${part.filename}" is not a supported audio file. Accepted formats: ${ALLOWED_EXT_LIST}.`)
+        }
+        const storageKey = `${Date.now()}-${part.filename.replace(/[^a-zA-Z0-9._-]/g, "_").replace(/\.{2,}/g, ".")}`
+        const destPath = path.join(env.musicStorageDir, storageKey)
+        await pipeline(part.file, fs.createWriteStream(destPath))
+        if (part.file.truncated) {
+          await fs.promises.unlink(destPath).catch(() => {})
+          throw badRequest(`"${part.filename}" is larger than the 200 MB upload limit.`)
+        }
+        const stat = fs.statSync(destPath)
+        filePart = { filename: storageKey, originalName: part.filename, filePath: destPath, size: stat.size }
+      } else {
+        fields[part.fieldname] = String(part.value)
+      }
+    }
+
+    if (!filePart) throw badRequest("A file is required.")
+
+    const tags = await parseFile(filePart.filePath).catch(() => null)
+    if (!tags?.format?.container) {
+      await fs.promises.unlink(filePart.filePath).catch(() => {})
+      throw badRequest(`"${filePart.originalName}" could not be read as audio. Accepted formats: ${ALLOWED_EXT_LIST}.`)
+    }
+
+    const common = tags.common
+    const duration = tags.format.duration
+
+    const track = await prisma.track.create({
+      data: {
+        title: fields.title || common?.title || path.parse(filePart.originalName).name,
+        artist: fields.artist || common?.artist || "Unknown",
+        album: fields.album || common?.album || "Unknown",
+        genre: fields.genre || common?.genre?.[0] || "Pop",
+        durationSec: duration && Number.isFinite(duration) ? Math.round(duration) : 0,
+        fileSizeMb: Number((filePart.size / (1024 * 1024)).toFixed(1)),
+        storageKey: filePart.filename,
+        uploadedById: user.id,
+        folderId: await dumpFolderId(organizationId),
+        organizationId,
+      },
+    })
+    const existing = await withTrackIds(existingPlaylist.id)
+    await prisma.playlistTrack.create({
+      data: { playlistId: existingPlaylist.id, trackId: track.id, position: existing.length },
+    })
+    await prisma.playlist.update({ where: { id: existingPlaylist.id }, data: { updatedAt: new Date() } })
+    return reply.status(201).send(toTrack(track, user.email))
+  })
+
   app.delete<{ Params: { id: string; trackId: string } }>("/playlists/:id/tracks/:trackId", async (request, reply) => {
     const user = requireUser(request)
     if (!can(user.role, "playlist:write")) throw forbidden()
@@ -216,7 +303,11 @@ export default async function playlistsRoutes(app: FastifyInstance) {
       const { targetType, targetId } = request.body
       const playlist = await scopedPlaylist(scope, request.params.id)
       await scopedAssignmentTarget(scope, targetType, targetId)
-      if (targetType === "ZONE") await assertPlaylistFitsZone(playlist, targetId)
+      if (targetType === "ZONE") {
+        const zone = await prisma.zone.findUnique({ where: { id: targetId }, include: { leaderZone: { select: { name: true } } } })
+        if (zone?.leaderZone) throw conflict(`This zone follows ${zone.leaderZone.name}.`)
+        await assertPlaylistFitsZone(playlist, targetId)
+      }
 
       const existingAssignment = await prisma.playlistAssignment.findFirst({
         where: { playlistId: playlist.id, targetType, targetId },

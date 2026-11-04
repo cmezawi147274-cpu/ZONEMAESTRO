@@ -9,6 +9,7 @@ export const ROLES = [
   "ORGANIZATION_ADMIN",
   "LOCATION_MANAGER",
   "VIEWER",
+  "SUPER_ORGANIZATION_ADMIN",
 ] as const
 export type Role = (typeof ROLES)[number]
 
@@ -17,6 +18,7 @@ export const ROLE_LABELS: Record<Role, string> = {
   ORGANIZATION_ADMIN: "Organization Admin",
   LOCATION_MANAGER: "Location Manager",
   VIEWER: "Viewer",
+  SUPER_ORGANIZATION_ADMIN: "Super Organization Admin",
 }
 
 /** Windows MusicServer connection status, as reported via heartbeat. */

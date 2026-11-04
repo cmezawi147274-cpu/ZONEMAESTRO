@@ -2,7 +2,8 @@
 
 import { use } from "react"
 import Link from "next/link"
-import { ArrowLeft, Speaker, ServerCog } from "lucide-react"
+import { useRouter } from "next/navigation"
+import { ArrowLeft, Speaker, ServerCog, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/common/page-header"
 import { EmptyState } from "@/components/common/empty-state"
 import { RoleGate } from "@/components/common/role-gate"
@@ -10,20 +11,35 @@ import { ServerStatusBadge, ZoneStateBadge } from "@/components/common/status-ba
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 import { EditLocationDialog } from "@/components/locations/edit-location-dialog"
-import { useLocation } from "@/hooks/use-locations"
+import { useLocation, useDeleteLocation } from "@/hooks/use-locations"
 import { useOrganization } from "@/hooks/use-organizations"
 import { useServers } from "@/hooks/use-servers"
 import { useZones } from "@/hooks/use-zones"
+import { useAuth } from "@/hooks/use-auth"
 import { formatRelativeTime } from "@/lib/format"
 import { formatTimezoneLabel } from "@/lib/geo/locations"
 
 export default function LocationDetailPage(props: PageProps<"/locations/[id]">) {
   const { id } = use(props.params)
+  const router = useRouter()
+  const { role } = useAuth()
   const { data: location, isLoading } = useLocation(id)
   const { data: org } = useOrganization(location?.organizationId)
   const { data: servers } = useServers({ locationId: id })
   const { data: zones } = useZones({ locationId: id })
+  const deleteLocation = useDeleteLocation()
 
   if (isLoading) {
     return (
@@ -48,9 +64,42 @@ export default function LocationDetailPage(props: PageProps<"/locations/[id]">) 
             location.latitude != null && location.longitude != null ? formatTimezoneLabel(location) : location.timezone
           } · ${org ? org.name : ""}`}
           actions={
-            <RoleGate permission="location:write">
-              <EditLocationDialog location={location} />
-            </RoleGate>
+            <div className="flex items-center gap-2">
+              <RoleGate permission="location:write">
+                <EditLocationDialog location={location} />
+              </RoleGate>
+              {role === "SUPER_ADMIN" && (
+                <AlertDialog>
+                  <AlertDialogTrigger render={
+                    <Button variant="destructive" size="sm" disabled={deleteLocation.isPending}>
+                      <Trash2 className="size-4" />
+                      Delete Location
+                    </Button>
+                  } />
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Delete {location.name}?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        This permanently deletes {location.name} with all its Music Servers, zones and
+                        schedules. Its venue PCs will be disconnected and must be paired again. A location
+                        that still has users cannot be deleted, so move or delete its users first. This
+                        cannot be undone.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction
+                        variant="destructive"
+                        disabled={deleteLocation.isPending}
+                        onClick={() => deleteLocation.mutate(location.id, { onSuccess: () => router.push("/locations") })}
+                      >
+                        Delete Location
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              )}
+            </div>
           }
         />
       </div>

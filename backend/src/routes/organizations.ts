@@ -3,7 +3,7 @@ import { prisma } from "../lib/db.js"
 import { toOrganization } from "../lib/serialize.js"
 import { requireAuth, requireUser, tenantScope } from "../lib/auth-context.js"
 import { can } from "../lib/rbac.js"
-import { forbidden, notFound } from "../lib/http-error.js"
+import { badRequest, forbidden, notFound } from "../lib/http-error.js"
 import { pushActivity } from "../lib/activity.js"
 import { audit } from "../lib/audit.js"
 
@@ -78,7 +78,15 @@ export default async function organizationsRoutes(app: FastifyInstance) {
   app.delete<{ Params: { id: string } }>("/organizations/:id", async (request, reply) => {
     const user = requireUser(request)
     if (!can(user.role, "org:write")) throw forbidden()
-    await prisma.organization.delete({ where: { id: request.params.id } })
+    const org = await prisma.organization.findUnique({ where: { id: request.params.id } })
+    if (!org) throw notFound("Organization")
+    const userCount = await prisma.user.count({ where: { organizationId: org.id, role: { not: "SUPER_ADMIN" } } })
+    if (userCount > 0) throw badRequest(`This organization still has ${userCount} user${userCount === 1 ? "" : "s"}. Move or delete them on the Users page first.`)
+    const servers = await prisma.musicServer.findMany({ where: { organizationId: org.id }, select: { id: true } })
+    await prisma.$transaction([
+      prisma.organization.delete({ where: { id: org.id } }),
+      prisma.deletedServerTombstone.createMany({ data: servers.map((s) => ({ id: s.id })), skipDuplicates: true }),
+    ])
     await audit(request, { action: "organization.delete", targetType: "Organization", targetId: request.params.id, summary: `Deleted organization ${request.params.id} and everything under it.` })
     return reply.status(204).send()
   })

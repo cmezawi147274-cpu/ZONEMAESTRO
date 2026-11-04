@@ -11,7 +11,7 @@ import { sendNewUserInviteEmail } from "../lib/mailer.js"
 import type { Role } from "@prisma/client"
 
 /** Seniority, so a creator can never mint a peer or a superior. */
-const RANK: Record<Role, number> = { SUPER_ADMIN: 3, ORGANIZATION_ADMIN: 2, LOCATION_MANAGER: 1, VIEWER: 0 }
+const RANK: Record<Role, number> = { SUPER_ADMIN: 3, ORGANIZATION_ADMIN: 2, LOCATION_MANAGER: 1, VIEWER: 0, SUPER_ORGANIZATION_ADMIN: 2 }
 
 /** Mirrors src/lib/constants.ts ROLE_LABELS — kept as its own copy here
  * because the backend package's rootDir is `src` and cannot import the
@@ -21,6 +21,7 @@ const ROLE_LABELS: Record<Role, string> = {
   ORGANIZATION_ADMIN: "Organization Admin",
   LOCATION_MANAGER: "Location Manager",
   VIEWER: "Viewer",
+  SUPER_ORGANIZATION_ADMIN: "Super Organization Admin",
 }
 
 /** Roles that are bound to exactly one venue — a location is mandatory and
@@ -46,7 +47,7 @@ const MIN_PASSWORD_LENGTH = 8
 /** Which existing users this caller is allowed to see or act on. */
 function visibilityWhere(actor: AuthUser) {
   if (actor.role === "SUPER_ADMIN") return {}
-  if (actor.role === "ORGANIZATION_ADMIN") {
+  if (actor.role === "ORGANIZATION_ADMIN" || actor.role === "SUPER_ORGANIZATION_ADMIN") {
     if (!actor.organizationId) return { id: actor.id }
     return { organizationId: actor.organizationId }
   }
@@ -69,7 +70,7 @@ async function resolveScope(actor: AuthUser, role: Role, body: Partial<UserBody>
     const location = await prisma.location.findUnique({ where: { id: locationId } })
     if (!location) throw notFound("Location")
     if (actor.role === "LOCATION_MANAGER" && location.id !== actor.locationId) throw forbidden()
-    if (actor.role === "ORGANIZATION_ADMIN" && location.organizationId !== actor.organizationId) throw forbidden()
+    if ((actor.role === "ORGANIZATION_ADMIN" || actor.role === "SUPER_ORGANIZATION_ADMIN") && location.organizationId !== actor.organizationId) throw forbidden()
     return { organizationId: location.organizationId, locationId: location.id }
   }
 

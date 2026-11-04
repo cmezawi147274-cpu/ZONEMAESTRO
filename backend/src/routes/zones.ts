@@ -4,11 +4,13 @@ import { prisma } from "../lib/db.js"
 import { toZone, toPlaylist, isZoneCrossfade } from "../lib/serialize.js"
 import { requireAuth, requireUser, tenantScope, type TenantScope } from "../lib/auth-context.js"
 import { can } from "../lib/rbac.js"
-import { forbidden, notFound, badRequest } from "../lib/http-error.js"
+import { forbidden, notFound, badRequest, conflict } from "../lib/http-error.js"
 import { queuePlaylistTracksForServer } from "../lib/zone-effects.js"
 import { pushToAgent } from "../lib/agent-registry.js"
 import { pushActivity } from "../lib/activity.js"
 import { scopedPlaylist, libraryReadWhere, assertPlaylistFitsZone } from "../lib/tenant.js"
+
+const withLeader = { leaderZone: { select: { name: true } } }
 
 async function allowedLocationIds(organizationId: string) {
   const locs = await prisma.location.findMany({ where: { organizationId }, select: { id: true } })
@@ -22,7 +24,7 @@ async function allowedLocationIds(organizationId: string) {
  * leaking that the id exists.
  */
 async function scopedZone(scope: TenantScope, zoneId: string) {
-  const zone = await prisma.zone.findUnique({ where: { id: zoneId } })
+  const zone = await prisma.zone.findUnique({ where: { id: zoneId }, include: withLeader })
   if (!zone) throw notFound("Zone")
   if (scope.isSuperAdmin) return zone
   if (scope.locationId) {
@@ -34,7 +36,7 @@ async function scopedZone(scope: TenantScope, zoneId: string) {
   return zone
 }
 
-async function withNowPlaying(zones: DbZone[]) {
+async function withNowPlaying(zones: (DbZone & { leaderZone?: { name: string } | null })[]) {
   const trackIds = [...new Set(zones.map((z) => z.currentTrackId).filter((id): id is string => !!id))]
   const playlistIds = [...new Set(zones.map((z) => z.reportedPlaylistId ?? z.currentPlaylistId).filter((id): id is string => !!id))]
   if (trackIds.length === 0 && playlistIds.length === 0) return zones.map((z) => toZone(z))
@@ -79,7 +81,7 @@ export default async function zonesRoutes(app: FastifyInstance) {
     }
     if (serverId) where.serverId = serverId
     if (locationId && !scope.locationId) where.locationId = locationId
-    const zones = await prisma.zone.findMany({ where, orderBy: { name: "asc" } })
+    const zones = await prisma.zone.findMany({ where, orderBy: { name: "asc" }, include: withLeader })
     return reply.send(await withNowPlaying(zones))
   })
 
@@ -132,6 +134,7 @@ export default async function zonesRoutes(app: FastifyInstance) {
     const zone = await prisma.zone.update({
       where: { id: target.id },
       data: { prayerModeEnabled: request.body.prayerModeEnabled },
+      include: withLeader,
     })
     return reply.send(toZone(zone))
   })
@@ -141,6 +144,7 @@ export default async function zonesRoutes(app: FastifyInstance) {
     if (!can(user.role, "zone:assign")) throw forbidden()
     const scope = tenantScope(request)
     const zone = await scopedZone(scope, request.params.id)
+    if (zone.leaderZone) throw conflict(`This zone follows ${zone.leaderZone.name}.`)
     const server = await prisma.musicServer.findUnique({ where: { id: zone.serverId } })
     if (!server || server.status === "OFFLINE" || server.status === "UNKNOWN") {
       throw badRequest(`${server?.name ?? "Server"} is offline — playlist not assigned.`)
@@ -153,6 +157,7 @@ export default async function zonesRoutes(app: FastifyInstance) {
     const updated = await prisma.zone.update({
       where: { id: zone.id },
       data: { currentPlaylistId: playlist.id, currentTrackId: firstTrack, excludedTrackIds },
+      include: withLeader,
     })
     await queuePlaylistTracksForServer(playlist.id, zone.serverId)
     return reply.send(toZone(updated))
@@ -162,6 +167,7 @@ export default async function zonesRoutes(app: FastifyInstance) {
     const user = requireUser(request)
     if (!can(user.role, "zone:assign")) throw forbidden()
     const zone = await scopedZone(tenantScope(request), request.params.id)
+    if (zone.leaderZone) throw conflict(`This zone follows ${zone.leaderZone.name}.`)
     const server = await prisma.musicServer.findUnique({ where: { id: zone.serverId } })
     if (!server || server.status === "OFFLINE" || server.status === "UNKNOWN") {
       throw badRequest(`${server?.name ?? "Server"} is offline — playlist not removed.`)
@@ -170,7 +176,7 @@ export default async function zonesRoutes(app: FastifyInstance) {
     if (!playlistId || zone.currentPlaylistId !== playlistId) {
       throw badRequest("This zone's playlist has changed. Refresh and try again.")
     }
-    const updated = await prisma.zone.update({ where: { id: zone.id }, data: { currentPlaylistId: null } })
+    const updated = await prisma.zone.update({ where: { id: zone.id }, data: { currentPlaylistId: null }, include: withLeader })
     await prisma.playlistAssignment.deleteMany({ where: { playlistId, targetType: "ZONE", targetId: zone.id } })
     return reply.send(toZone(updated))
   })
@@ -195,7 +201,7 @@ export default async function zonesRoutes(app: FastifyInstance) {
         : null
       currentTrackId = playlist?.tracks.find((t) => !excludedTrackIds.includes(t.trackId))?.trackId ?? null
     }
-    const updated = await prisma.zone.update({ where: { id: zone.id }, data: { excludedTrackIds, currentTrackId } })
+    const updated = await prisma.zone.update({ where: { id: zone.id }, data: { excludedTrackIds, currentTrackId }, include: withLeader })
     return reply.send(toZone(updated))
   })
 
@@ -204,7 +210,7 @@ export default async function zonesRoutes(app: FastifyInstance) {
     if (!can(user.role, "zone:assign")) throw forbidden()
     const zone = await scopedZone(tenantScope(request), request.params.id)
     const excludedTrackIds = zone.excludedTrackIds.filter((id) => id !== request.params.trackId)
-    const updated = await prisma.zone.update({ where: { id: zone.id }, data: { excludedTrackIds } })
+    const updated = await prisma.zone.update({ where: { id: zone.id }, data: { excludedTrackIds }, include: withLeader })
     return reply.send(toZone(updated))
   })
 
@@ -226,6 +232,7 @@ export default async function zonesRoutes(app: FastifyInstance) {
     const updated = await prisma.zone.update({
       where: { id: zone.id },
       data: { crossfade: body === null ? Prisma.DbNull : { enabled: body.enabled, durationMs: body.durationMs } },
+      include: withLeader,
     })
     return reply.send(toZone(updated))
   })

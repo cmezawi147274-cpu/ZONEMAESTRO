@@ -1,6 +1,6 @@
 "use client"
 
-import { use } from "react"
+import { use, useEffect, useState } from "react"
 import Link from "next/link"
 import { ArrowLeft, Cpu, MemoryStick, HardDrive, ServerCog, Trash2, PowerOff, Loader2 } from "lucide-react"
 import { PageHeader } from "@/components/common/page-header"
@@ -26,7 +26,9 @@ import {
 import { ServerQuickActions } from "@/components/servers/server-quick-actions"
 import { CommandHistory } from "@/components/servers/command-history"
 import { ServerSyncTable } from "@/components/servers/server-sync-table"
+import { ServerPrayerCard } from "@/components/servers/server-prayer-card"
 import { ZoneCard } from "@/components/zones/zone-card"
+import { SuperZonesCard } from "@/components/zones/super-zones-card"
 import { useServer, useDeleteServer, useForgetServer } from "@/hooks/use-servers"
 import { useZones } from "@/hooks/use-zones"
 import { useLocation } from "@/hooks/use-locations"
@@ -37,10 +39,29 @@ import { usePlaylists } from "@/hooks/use-playlists"
 import { formatRelativeTime, formatDateTime } from "@/lib/format"
 import { useRouter } from "next/navigation"
 
+function pcTime(wallMs: number | null | undefined, measuring: boolean | undefined, elapsedMs: number): string {
+  if (typeof wallMs !== "number") return measuring ? "Measuring…" : "Not reported"
+  return new Date(wallMs + elapsedMs).toLocaleString(undefined, {
+    weekday: "short",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: "UTC",
+  })
+}
+
+function ServerTime({ wallMs, measuring, receivedAt }: { wallMs?: number | null; measuring?: boolean; receivedAt: number }) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+  return pcTime(wallMs, measuring, Math.max(0, now - receivedAt))
+}
+
 export default function ServerDetailPage(props: PageProps<"/servers/[id]">) {
   const { id } = use(props.params)
   const router = useRouter()
-  const { data: server, isLoading } = useServer(id)
+  const { data: server, isLoading, dataUpdatedAt } = useServer(id)
   const { data: location } = useLocation(server?.locationId)
   const { data: zones } = useZones({ serverId: id })
   const { data: commands, isLoading: commandsLoading } = useCommands({ serverId: id })
@@ -229,12 +250,17 @@ export default function ServerDetailPage(props: PageProps<"/servers/[id]">) {
             <p className="font-medium">
               <span className="inline-flex items-center gap-1.5">
                 {server.version}
+                {server.latestAgentVersion && server.agentVersionStatus === "current" && (
+                  <Badge variant="outline" className="border-emerald-500/40 text-emerald-600 dark:text-emerald-500">
+                    Latest
+                  </Badge>
+                )}
                 {server.agentVersionStatus === "outdated" && (
                   <Badge variant="outline" className="border-amber-500/40 text-amber-600 dark:text-amber-500">
                     Outdated
                   </Badge>
                 )}
-                {server.agentVersionStatus === "unknown" && server.minSupportedAgentVersion && (
+                {server.agentVersionStatus === "unknown" && (server.latestAgentVersion || server.minSupportedAgentVersion) && (
                   <Badge variant="outline" className="text-muted-foreground">
                     Unknown
                   </Badge>
@@ -246,7 +272,10 @@ export default function ServerDetailPage(props: PageProps<"/servers/[id]">) {
                 needed, it cannot trigger anything remotely. The raw string
                 above is whatever the venue reported, unmodified — support
                 needs to read it even when it cannot be parsed. */}
-            {server.agentVersionStatus !== "current" && server.minSupportedAgentVersion && (
+            {server.agentVersionStatus !== "current" && server.latestAgentVersion && (
+              <p className="text-xs text-muted-foreground">Latest version: {server.latestAgentVersion}</p>
+            )}
+            {server.agentVersionStatus !== "current" && !server.latestAgentVersion && server.minSupportedAgentVersion && (
               <p className="text-xs text-muted-foreground">Minimum supported: {server.minSupportedAgentVersion}</p>
             )}
           </div>
@@ -277,15 +306,27 @@ export default function ServerDetailPage(props: PageProps<"/servers/[id]">) {
             <p className="text-muted-foreground">Pending Sync Jobs</p>
             <p className="font-medium">{server.pendingSyncJobs}</p>
           </div>
+          <div>
+            <p className="text-muted-foreground">Server Time</p>
+            <p className="font-medium">
+              <ServerTime wallMs={server.pcClockWallMs} measuring={server.pcClockMeasuring} receivedAt={dataUpdatedAt} />
+            </p>
+          </div>
         </CardContent>
       </Card>
 
       <Tabs defaultValue="zones">
-        <TabsList>
+        <TabsList className="max-w-full justify-start overflow-x-auto overflow-y-hidden [scrollbar-width:none]">
           <TabsTrigger value="zones">Zones</TabsTrigger>
           <TabsTrigger value="sync">Music Sync</TabsTrigger>
           <TabsTrigger value="schedules">Schedules</TabsTrigger>
           <TabsTrigger value="commands">Commands</TabsTrigger>
+          <RoleGate permission="prayer:read">
+            <TabsTrigger value="prayer">Prayer Mode</TabsTrigger>
+          </RoleGate>
+          <RoleGate permission="zone:read">
+            <TabsTrigger value="super-zones">Super Zones</TabsTrigger>
+          </RoleGate>
         </TabsList>
 
         <TabsContent value="zones" className="pt-4">
@@ -314,22 +355,30 @@ export default function ServerDetailPage(props: PageProps<"/servers/[id]">) {
               {!schedules || schedules.length === 0 ? (
                 <EmptyState icon={ServerCog} title="No schedules for this server's zones" className="border-none py-8" />
               ) : (
-                schedules.map((schedule) => (
-                  <div key={schedule.id} className="flex items-center justify-between rounded-lg border p-3 text-sm">
-                    <div>
-                      <p className="font-medium">
-                        {schedule.name} · {zones?.find((z) => z.id === schedule.zoneId)?.name}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {schedule.startTime}–{schedule.endTime} · {schedule.days.join(", ")} ·{" "}
-                        {playlists?.find((p) => p.id === schedule.playlistId)?.name}
-                      </p>
+                schedules.map((schedule) => {
+                  const zone = zones?.find((z) => z.id === schedule.zoneId)
+                  return (
+                    <div key={schedule.id} className="flex items-center justify-between rounded-lg border p-3 text-sm">
+                      <div>
+                        <p className="font-medium">
+                          {schedule.name} · {zone?.name}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {schedule.startTime}–{schedule.endTime} · {schedule.days.join(", ")} ·{" "}
+                          {playlists?.find((p) => p.id === schedule.playlistId)?.name}
+                        </p>
+                        {zone?.leaderZoneId && (
+                          <p className="text-xs text-sky-600 dark:text-sky-400">
+                            Paused while following {zone.leaderZoneName}
+                          </p>
+                        )}
+                      </div>
+                      <span className={schedule.enabled ? "text-emerald-600 dark:text-emerald-400 text-xs font-medium" : "text-xs text-muted-foreground"}>
+                        {schedule.enabled ? "Enabled" : "Disabled"}
+                      </span>
                     </div>
-                    <span className={schedule.enabled ? "text-emerald-600 dark:text-emerald-400 text-xs font-medium" : "text-xs text-muted-foreground"}>
-                      {schedule.enabled ? "Enabled" : "Disabled"}
-                    </span>
-                  </div>
-                ))
+                  )
+                })
               )}
             </CardContent>
           </Card>
@@ -342,6 +391,18 @@ export default function ServerDetailPage(props: PageProps<"/servers/[id]">) {
             </CardContent>
           </Card>
         </TabsContent>
+
+        <RoleGate permission="prayer:read">
+          <TabsContent value="prayer" keepMounted className="pt-4">
+            <ServerPrayerCard key={server.id} serverId={server.id} organizationId={server.organizationId} />
+          </TabsContent>
+        </RoleGate>
+
+        <RoleGate permission="zone:read">
+          <TabsContent value="super-zones" className="pt-4">
+            <SuperZonesCard key={server.id} serverId={server.id} serverVersion={server.version} zones={zones ?? []} />
+          </TabsContent>
+        </RoleGate>
       </Tabs>
     </div>
   )

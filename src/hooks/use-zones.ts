@@ -192,6 +192,7 @@ export function useDeleteZone() {
     mutationFn: (zoneId: string) => zonesApi.remove(zoneId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["zones"] })
+      qc.invalidateQueries({ queryKey: ["super-zones"] })
       toast.success("Zone deleted")
     },
     onError: (e: Error) => toast.error(e.message),

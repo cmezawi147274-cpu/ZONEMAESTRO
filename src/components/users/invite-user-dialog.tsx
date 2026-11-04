@@ -90,7 +90,7 @@ export function InviteUserDialog() {
   // Which roles this creator may mint: never a peer, never a superior.
   const assignableRoles = ROLES.filter((r) => {
     if (actorRole === "SUPER_ADMIN") return true
-    if (actorRole === "ORGANIZATION_ADMIN") return r === "LOCATION_MANAGER" || r === "VIEWER"
+    if (actorRole === "ORGANIZATION_ADMIN" || actorRole === "SUPER_ORGANIZATION_ADMIN") return r === "LOCATION_MANAGER" || r === "VIEWER"
     return r === "VIEWER"
   })
 

@@ -56,6 +56,8 @@ export function useDeleteLocation() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["locations"] })
       qc.invalidateQueries({ queryKey: ["organizations"] })
+      qc.invalidateQueries({ queryKey: ["servers"] })
+      qc.invalidateQueries({ queryKey: ["zones"] })
       toast.success("Location deleted")
     },
     onError: (e: Error) => toast.error(e.message),

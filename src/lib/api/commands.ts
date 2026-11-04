@@ -4,6 +4,7 @@ import { delay } from "@/lib/mock/delay"
 import { store } from "@/lib/mock/store"
 import { nextId } from "@/lib/mock/ids"
 import { applyZoneCommandEffect } from "@/lib/mock/zone-effects"
+import { mockCopiesVolume } from "@/lib/api/super-zones"
 import { getTenantScope } from "@/lib/auth/session"
 import type { CommandSource, CommandType } from "@/lib/constants"
 import type { RemoteCommand } from "@/lib/api/types"
@@ -38,6 +39,12 @@ const ZONE_TRANSPORT_TYPES = new Set<CommandType>([
   "UNMUTE",
   "SET_EQ",
 ])
+
+// Super Zones, as routes/commands.ts in the backend: what a follower may not
+// be sent directly, and what a command to its leader is repeated to it.
+const FOLLOWER_LOCKED_TYPES = new Set<CommandType>(["PLAY", "PAUSE", "STOP", "NEXT", "PREVIOUS"])
+const MIRRORED_TYPES = new Set<CommandType>(["PLAY", "PAUSE", "STOP"])
+const VOLUME_TYPES = new Set<CommandType>(["SET_VOLUME", "MUTE", "UNMUTE"])
 
 export const commandsApi = {
   async list(filters?: { serverId?: string }): Promise<RemoteCommand[]> {
@@ -75,6 +82,13 @@ export const commandsApi = {
         // Every role takes the exact same path: apply the action now, or
         // return an error. Never PENDING, never a client-side optimistic
         // patch, never a wait for a local-server confirmation.
+        const zone = input.zoneId ? store.zones.find((z) => z.id === input.zoneId) : undefined
+        if (
+          zone?.leaderZoneId &&
+          (FOLLOWER_LOCKED_TYPES.has(input.type) || (VOLUME_TYPES.has(input.type) && mockCopiesVolume(zone.leaderZoneId)))
+        ) {
+          throw new Error(`This zone follows ${zone.leaderZoneName}.`)
+        }
         if (!server || server.status === "OFFLINE" || server.status === "UNKNOWN") {
           const failedCommand: RemoteCommand = {
             id: nextId("cmd"),
@@ -95,7 +109,6 @@ export const commandsApi = {
           throw new Error(failedCommand.resultMessage!)
         }
 
-        const zone = input.zoneId ? store.zones.find((z) => z.id === input.zoneId) : undefined
         const sequence = zone ? ++zone.commandSequence : null
         const failed = Math.random() < 0.08
         const command: RemoteCommand = {
@@ -123,6 +136,14 @@ export const commandsApi = {
         })
         if (failed) throw new Error(command.resultMessage!)
         applyZoneCommandEffect(command)
+        if (zone && !zone.leaderZoneId && (MIRRORED_TYPES.has(input.type) || (VOLUME_TYPES.has(input.type) && mockCopiesVolume(zone.id)))) {
+          for (const follower of store.zones.filter((z) => z.leaderZoneId === zone.id)) {
+            if (MIRRORED_TYPES.has(input.type) && source !== "SUPER_ADMIN" && follower.pausedByPrayer) continue
+            const mirrored: RemoteCommand = { ...command, id: nextId("cmd"), zoneId: follower.id, sequence: ++follower.commandSequence }
+            store.commands.unshift(mirrored)
+            applyZoneCommandEffect(mirrored)
+          }
+        }
         return command
       }
 

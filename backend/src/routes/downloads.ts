@@ -17,10 +17,10 @@ import { forbidden, notFound } from "../lib/http-error.js"
  * file there without a matching Track row, which would eventually delete
  * this installer.
  */
-const INSTALLER_DIR = "/app/data/downloads"
+export const INSTALLER_DIR = "/app/data/downloads"
 // The uploaded build, served byte-for-byte under its own name — nothing here
 // generates, repacks or renames it.
-const INSTALLER_FILE = "CMMP-Venue-Install-2026-09-22_1255.zip"
+export const INSTALLER_FILE = "CMMP-Venue-Install-2026-09-22_1255.zip"
 
 export default async function downloadsRoutes(app: FastifyInstance) {
   app.addHook("preHandler", requireAuth)

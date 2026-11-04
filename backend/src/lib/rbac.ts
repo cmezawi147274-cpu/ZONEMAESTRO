@@ -21,6 +21,7 @@ export type Permission =
   | "music:delete"
   | "playlist:read"
   | "playlist:write"
+  | "playlist:upload"
   | "schedule:read"
   | "schedule:write"
   | "sync:trigger"
@@ -38,7 +39,7 @@ const MATRIX: Record<Role, Permission[]> = {
   SUPER_ADMIN: [
     "org:read", "org:write", "location:read", "location:write", "server:read", "server:write",
     "server:pair", "server:command", "server:forget", "zone:read", "zone:control", "zone:assign", "zone:override", "music:read",
-    "music:upload", "music:delete", "playlist:read", "playlist:write", "schedule:read", "schedule:write",
+    "music:upload", "music:delete", "playlist:read", "playlist:write", "playlist:upload", "schedule:read", "schedule:write",
     "sync:trigger", "users:manage", "logs:read", "prayer:read", "prayer:manage",
   ],
   // Music library: *reading* it follows "playlist:read", because a playlist
@@ -64,6 +65,9 @@ const MATRIX: Record<Role, Permission[]> = {
     "playlist:read", "schedule:read", "schedule:write", "sync:trigger", "users:manage", "logs:read", "prayer:read",
   ],
   VIEWER: ["zone:read", "zone:control"],
+  get SUPER_ORGANIZATION_ADMIN(): Permission[] {
+    return [...this.ORGANIZATION_ADMIN, "playlist:upload"]
+  },
 }
 
 export function can(role: Role | undefined | null, permission: Permission): boolean {

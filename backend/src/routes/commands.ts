@@ -3,12 +3,12 @@ import { prisma } from "../lib/db.js"
 import { toRemoteCommand } from "../lib/serialize.js"
 import { requireAuth, requireUser, tenantScope, type TenantScope } from "../lib/auth-context.js"
 import { can } from "../lib/rbac.js"
-import { forbidden, notFound, badRequest } from "../lib/http-error.js"
+import { forbidden, notFound, badRequest, conflict } from "../lib/http-error.js"
 import { pushActivity } from "../lib/activity.js"
 import { applyZoneCommandEffect } from "../lib/zone-effects.js"
 import { isAgentConnected, pushToAgent, waitForAck } from "../lib/agent-registry.js"
 import { env } from "../lib/env.js"
-import type { CommandType, CommandSource } from "@prisma/client"
+import type { CommandType, CommandSource, Zone } from "@prisma/client"
 import type { Prisma } from "@prisma/client"
 
 // Exported so routes/agent.ts can tell a server-level command (Forget,
@@ -16,6 +16,13 @@ import type { Prisma } from "@prisma/client"
 // deciding whether a FAILED ack is worth a persistent Alert — see the
 // POST /server/commands/ack handler there.
 export const ZONE_TRANSPORT_TYPES = new Set<CommandType>(["PLAY", "PAUSE", "STOP", "NEXT", "PREVIOUS", "SET_VOLUME", "MUTE", "UNMUTE", "SET_EQ"])
+
+// Super Zones: what a follower may not be sent directly, and what a portal
+// command to its leader is repeated to it. NEXT/PREVIOUS are never repeated;
+// volume only when the leader's group copies volume.
+const FOLLOWER_LOCKED_TYPES = new Set<CommandType>(["PLAY", "PAUSE", "STOP", "NEXT", "PREVIOUS"])
+const MIRRORED_TYPES = new Set<CommandType>(["PLAY", "PAUSE", "STOP"])
+const VOLUME_TYPES = new Set<CommandType>(["SET_VOLUME", "MUTE", "UNMUTE"])
 
 /** Servers this caller may address: their own venue (VIEWER), otherwise
  * their organization. Super admins are unrestricted (null = no filter). */
@@ -47,6 +54,68 @@ async function displayNamesFor(userIds: (string | null)[]): Promise<Map<string, 
  * return one command. */
 async function displayNameFor(userId: string): Promise<string> {
   return (await displayNamesFor([userId])).get(userId) ?? userId
+}
+
+/** The payload without a client's own `override`: only a super admin's PLAY overrides prayer. */
+function withoutOverride(payload: Record<string, unknown> | undefined) {
+  if (!payload || typeof payload !== "object" || !("override" in payload)) return payload
+  const { override: _override, ...rest } = payload
+  return rest
+}
+
+/** Repeats a leader's command to each of its followers this caller may reach,
+ * as that follower's own command. All are sent at once; each settles like
+ * the leader's (TIMEOUT, or the optimistic effect when the ack carried no
+ * zoneState) without holding up the leader's response. A follower paused for
+ * prayer gets volume, and a super admin's override, but no other transport. */
+async function mirrorToFollowers(
+  leader: Zone,
+  scope: TenantScope,
+  type: CommandType,
+  payload: Record<string, unknown> | undefined,
+  source: CommandSource,
+  issuedById: string,
+  serverName: string
+) {
+  const followers = await prisma.zone.findMany({
+    where: {
+      serverId: leader.serverId,
+      leaderZoneId: leader.id,
+      ...(MIRRORED_TYPES.has(type) && source !== "SUPER_ADMIN" ? { pausedByPrayer: null } : {}),
+      ...(scope.locationId ? { locationId: scope.locationId } : {}),
+    },
+  })
+  await Promise.all(
+    followers.map(async (follower) => {
+      const { commandSequence: sequence } = await prisma.zone.update({ where: { id: follower.id }, data: { commandSequence: { increment: 1 } } })
+      const command = await prisma.remoteCommand.create({
+        data: {
+          serverId: leader.serverId,
+          zoneId: follower.id,
+          type,
+          payload: (payload ?? undefined) as Prisma.InputJsonValue | undefined,
+          status: "SENT",
+          source,
+          sequence,
+          issuedById,
+          sentAt: new Date(),
+        },
+      })
+      pushToAgent(leader.serverId, "ReceiveCommand", [{ commandId: command.id, type, zoneId: follower.id, payload: payload ?? null, sequence }])
+      const ack = await waitForAck(command.id, env.agentCommandAckTimeoutMs)
+      if (!ack) {
+        await prisma.remoteCommand.update({
+          where: { id: command.id },
+          data: { status: "TIMEOUT", completedAt: new Date(), resultMessage: `No response from ${serverName} within ${env.agentCommandAckTimeoutMs}ms.` },
+        })
+        return
+      }
+      const acked = await prisma.remoteCommand.findUniqueOrThrow({ where: { id: command.id } })
+      if (acked.status !== "SUCCESS") return
+      const zone = await prisma.zone.findUnique({ where: { id: follower.id } })
+      if (zone && zone.lastAppliedSequence !== sequence) await applyZoneCommandEffect(follower.id, type, payload, sequence, source)
+    })
+  )
 }
 
 export default async function commandsRoutes(app: FastifyInstance) {
@@ -99,10 +168,14 @@ export default async function commandsRoutes(app: FastifyInstance) {
       const scope = tenantScope(request)
       const allowedServers = await allowedServerIds(scope)
       if (allowedServers && !allowedServers.includes(serverId)) throw notFound("Server")
+      const target = zoneId ? await prisma.zone.findUnique({ where: { id: zoneId } }) : null
       if (zoneId) {
-        const target = await prisma.zone.findUnique({ where: { id: zoneId } })
         if (!target || target.serverId !== serverId) throw notFound("Zone")
         if (scope.locationId && target.locationId !== scope.locationId) throw notFound("Zone")
+      }
+      if (target?.leaderZoneId && (FOLLOWER_LOCKED_TYPES.has(type) || VOLUME_TYPES.has(type))) {
+        const leader = await prisma.zone.findUnique({ where: { id: target.leaderZoneId } })
+        if (leader && (FOLLOWER_LOCKED_TYPES.has(type) || leader.superZoneCopyVolume)) throw conflict(`This zone follows ${leader.name}.`)
       }
 
       // The only client-supplied source ever trusted is "SCHEDULE" (Prayer
@@ -134,6 +207,12 @@ export default async function commandsRoutes(app: FastifyInstance) {
           throw badRequest(failed.resultMessage!)
         }
 
+        // A super admin's PLAY overrides prayer, and is repeated to followers
+        // paused for prayer too: the flag lets agent 2026.11.4+ start or resume
+        // them together with their super zone. Older builds ignore it. No other
+        // command carries one, whatever the client sent.
+        const sent = source === "SUPER_ADMIN" && type === "PLAY" ? { ...payload, override: true } : withoutOverride(payload)
+
         let sequence: number | null = null
         if (zoneId) {
           const bumped = await prisma.zone.update({ where: { id: zoneId }, data: { commandSequence: { increment: 1 } } })
@@ -145,7 +224,7 @@ export default async function commandsRoutes(app: FastifyInstance) {
             serverId,
             zoneId: zoneId ?? null,
             type,
-            payload: (payload ?? undefined) as Prisma.InputJsonValue | undefined,
+            payload: (sent ?? undefined) as Prisma.InputJsonValue | undefined,
             status: "SENT",
             source,
             sequence,
@@ -158,9 +237,13 @@ export default async function commandsRoutes(app: FastifyInstance) {
         // every other agent, connected or not) can still pick this up via
         // the next GET /api/server/commands/pending poll — this only
         // shaves latency.
-        pushToAgent(serverId, "ReceiveCommand", [{ commandId: command.id, type, zoneId: zoneId ?? null, payload: payload ?? null, sequence }])
+        pushToAgent(serverId, "ReceiveCommand", [{ commandId: command.id, type, zoneId: zoneId ?? null, payload: sent ?? null, sequence }])
+        const ackWait = waitForAck(command.id, env.agentCommandAckTimeoutMs)
+        if (target && !target.leaderZoneId && (MIRRORED_TYPES.has(type) || (VOLUME_TYPES.has(type) && target.superZoneCopyVolume))) {
+          mirrorToFollowers(target, scope, type, sent, source, user.id, server.name).catch((err) => request.log.warn({ err, zoneId }, "could not repeat the command to this super zone's followers"))
+        }
 
-        const ack = await waitForAck(command.id, env.agentCommandAckTimeoutMs)
+        const ack = await ackWait
         if (!ack) {
           const timedOut = await prisma.remoteCommand.update({
             where: { id: command.id },

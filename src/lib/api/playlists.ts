@@ -1,10 +1,10 @@
-import { isMockMode } from "@/lib/config"
+import { env, isMockMode } from "@/lib/config"
 import { apiClient } from "@/lib/api/client"
 import { delay } from "@/lib/mock/delay"
 import { store } from "@/lib/mock/store"
 import { nextId } from "@/lib/mock/ids"
-import { getTenantScope } from "@/lib/auth/session"
-import type { Playlist, PlaylistAssignment } from "@/lib/api/types"
+import { getTenantScope, readSession } from "@/lib/auth/session"
+import type { Playlist, PlaylistAssignment, Track } from "@/lib/api/types"
 
 export interface CreatePlaylistInput {
   name: string
@@ -146,6 +146,44 @@ export const playlistsApi = {
     return apiClient.delete<Playlist>(`/playlists/${id}/tracks/${trackId}`)
   },
 
+  /** Uploads a new song onto this playlist only (POST /playlists/:id/upload).
+   * Never calls /music/upload — the song does not join the music library. */
+  async upload(
+    id: string,
+    file: File,
+    metadata: { title: string; artist: string; album: string; genre: string },
+    onProgress?: (percent: number) => void
+  ): Promise<Track> {
+    if (isMockMode) throw new Error("Playlist upload is not available in mock mode")
+    return new Promise((resolve, reject) => {
+      const form = new FormData()
+      form.append("file", file)
+      Object.entries(metadata).forEach(([k, v]) => form.append(k, v))
+      const xhr = new XMLHttpRequest()
+      xhr.open("POST", `${env.apiUrl}/playlists/${id}/upload`)
+      const session = readSession()
+      if (session) xhr.setRequestHeader("Authorization", `Bearer ${session.tokens.accessToken}`)
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress?.(Math.round((e.loaded / e.total) * 100))
+      }
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText))
+        else {
+          let message = `Upload failed (${xhr.status})`
+          try {
+            const body = JSON.parse(xhr.responseText)
+            if (body?.message) message = body.message
+          } catch {
+            /* non-JSON error body */
+          }
+          reject(new Error(message))
+        }
+      }
+      xhr.onerror = () => reject(new Error("Upload failed"))
+      xhr.send(form)
+    })
+  },
+
   async remove(id: string): Promise<void> {
     if (isMockMode) {
       await delay(300)
@@ -161,6 +199,8 @@ export const playlistsApi = {
   ): Promise<PlaylistAssignment> {
     if (isMockMode) {
       await delay(400)
+      const follower = target.targetType === "ZONE" ? store.zones.find((z) => z.id === target.targetId && z.leaderZoneId) : undefined
+      if (follower) throw new Error(`This zone follows ${follower.leaderZoneName}.`)
       const assignment: PlaylistAssignment = {
         id: nextId("asg"),
         playlistId,

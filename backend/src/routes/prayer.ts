@@ -10,14 +10,14 @@ import { getTodayTimings } from "../lib/prayer-times.js"
 import { isValidTimeZone } from "../lib/geo.js"
 import { calendarDateKey } from "../lib/timezone-math.js"
 
-async function resolveOrgId(scope: { isSuperAdmin: boolean; organizationId: string | null }): Promise<string | null> {
+export async function resolveOrgId(scope: { isSuperAdmin: boolean; organizationId: string | null }): Promise<string | null> {
   if (scope.organizationId) return scope.organizationId
   if (!scope.isSuperAdmin) return null
   const first = await prisma.organization.findFirst({ orderBy: { createdAt: "asc" } })
   return first?.id ?? null
 }
 
-function defaultPrayers() {
+export function defaultPrayers() {
   return Object.fromEntries(PRAYER_NAMES.map((name) => [name, { enabled: true, offsetMinutes: 0, pauseDurationMinutes: 10 }]))
 }
 

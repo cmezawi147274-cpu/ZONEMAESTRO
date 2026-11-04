@@ -28,6 +28,7 @@ export type Permission =
   | "music:delete"
   | "playlist:read"
   | "playlist:write"
+  | "playlist:upload"
   | "schedule:read"
   | "schedule:write"
   | "sync:trigger"
@@ -67,6 +68,7 @@ const MATRIX: Record<Role, Permission[]> = {
     "music:delete",
     "playlist:read",
     "playlist:write",
+    "playlist:upload",
     "schedule:read",
     "schedule:write",
     "sync:trigger",
@@ -122,6 +124,9 @@ const MATRIX: Record<Role, Permission[]> = {
    * playlists, no schedules, no settings — and cannot change what a zone
    * plays. See backend/src/routes/* for the authoritative enforcement. */
   VIEWER: ["zone:read", "zone:control"],
+  get SUPER_ORGANIZATION_ADMIN(): Permission[] {
+    return [...this.ORGANIZATION_ADMIN, "playlist:upload"]
+  },
 }
 
 export function can(role: Role | undefined | null, permission: Permission): boolean {

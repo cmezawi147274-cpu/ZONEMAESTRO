@@ -19,6 +19,7 @@ import { env } from "../lib/env.js"
 // MusicServer.organizationId being non-nullable to make the comparison fail.
 import { scopedServer } from "../lib/tenant.js"
 import { audit } from "../lib/audit.js"
+import { wantClockCheck } from "../lib/pc-clock.js"
 
 async function withExtras(server: { id: string }) {
   const [zoneCount, pendingSyncJobs] = await Promise.all([
@@ -65,6 +66,8 @@ export default async function serversRoutes(app: FastifyInstance) {
     if (!scope.isSuperAdmin && server.organizationId !== scope.organizationId) throw notFound("Server")
     if (scope.locationId && server.locationId !== scope.locationId) throw notFound("Server")
     const { zoneCount, pendingSyncJobs } = await withExtras(server)
+    const current = toMusicServer(server, zoneCount, pendingSyncJobs)
+    wantClockCheck(server.id, current.latestAgentVersion !== null && current.agentVersionStatus === "current" && server.status === "ONLINE")
     return reply.send(toMusicServer(server, zoneCount, pendingSyncJobs))
   })
 

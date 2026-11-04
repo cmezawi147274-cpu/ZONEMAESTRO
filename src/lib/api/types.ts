@@ -100,6 +100,7 @@ export interface MusicServer {
   /** Fleet policy from the backend (MIN_SUPPORTED_AGENT_VERSION). Null when
    * no minimum is configured, in which case nothing is ever flagged. */
   minSupportedAgentVersion: string | null
+  latestAgentVersion?: string | null
   /** Three-way, because "we cannot read this version" is not the same claim
    * as "this version is fine". There is no self-update path on the venue
    * side — a technician has to visit — so surfacing this is the only
@@ -127,6 +128,8 @@ export interface MusicServer {
   /** When a usable timezone last arrived on a heartbeat. Null means this
    * venue has never reported its clock. */
   reportedLocationAt: string | null
+  pcClockWallMs?: number | null
+  pcClockMeasuring?: boolean
 }
 
 /** Snapshot of a zone's playback captured right before an automatic
@@ -196,6 +199,10 @@ export interface Zone {
   nowPlayingTitle?: string | null
   nowPlayingArtist?: string | null
   nowPlayingPlaylistName?: string | null
+  /** The super zone this zone follows, on the same server. Null when it
+   * plays on its own. */
+  leaderZoneId: string | null
+  leaderZoneName: string | null
 }
 
 /** One of the three fixed-purpose EQ modules (Bass Boost, Loudness,
@@ -221,6 +228,7 @@ export interface ZoneEqualizerSettings {
   bassBoost: ZoneEqualizerModule
   loudness: ZoneEqualizerModule
   virtualizer: ZoneEqualizerModule
+  mono?: boolean
 }
 
 export interface Track {
@@ -427,6 +435,20 @@ export interface PrayerConfig {
   calculationMethodId: number
   prayers: Record<PrayerName, PrayerSettings>
   updatedAt: string
+}
+
+export interface SuperZoneGroup {
+  leaderZoneId: string
+  leaderName: string
+  followerZoneIds: string[]
+  copyVolume: boolean
+}
+
+export interface ServerPrayerSettings {
+  custom: boolean
+  prayers: Record<PrayerName, PrayerSettings>
+  organizationPrayers: Record<PrayerName, PrayerSettings>
+  updatedAt: string | null
 }
 
 /** Today's calculated prayer clock times, "HH:mm" in the configured

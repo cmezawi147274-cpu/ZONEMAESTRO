@@ -19,7 +19,7 @@ import { badRequest, notFound, HttpError } from "../lib/http-error.js"
 import { requireAgent, generateAgentToken, sha256Hex } from "../lib/agent-auth.js"
 import { hashPairingCode, normalizePairingCode, pairingReplayWindowMs, checkAndRecordLocationPairingAttempt } from "../lib/pairing.js"
 import { seededShuffle } from "../lib/shuffle.js"
-import { markAgentSeen, resolveAck, forgetAgent, markZoneVolumeWritten, clearZoneVolumeWindow, shouldIgnoreReportedVolume } from "../lib/agent-registry.js"
+import { markAgentSeen, resolveAck, forgetAgent, markZoneVolumeWritten, clearZoneVolumeWindow, shouldIgnoreReportedVolume, pushToAgent } from "../lib/agent-registry.js"
 import { emitEvent } from "../realtime.js"
 import { pushActivity } from "../lib/activity.js"
 import { MUSIC_SERVER_HUB_PATH } from "../agent/signalrHub.js"
@@ -27,8 +27,10 @@ import { isValidTimeZone } from "../lib/geo.js"
 import { signedMediaUrl } from "../lib/media-url.js"
 import { ZONE_TRANSPORT_TYPES } from "./commands.js"
 import { ZONE_EFFECT_FIELD } from "../lib/zone-effects.js"
-import { toZoneCrossfade } from "../lib/serialize.js"
-import type { CommandStatus, ZonePlaybackState } from "@prisma/client"
+import { toZoneCrossfade, toMusicServer } from "../lib/serialize.js"
+import { notePlaylistSync, clockCheckSlots, clockCheckCommands, clockCheckAck, setClockCheckHooks, restoreClockEstimate } from "../lib/pc-clock.js"
+import { loadPcClockEstimates, savePcClockEstimate } from "../lib/pc-clock-store.js"
+import type { CommandStatus, Prisma, ZonePlaybackState } from "@prisma/client"
 
 /** ASP.NET model binding is case-insensitive; the compiled agent's own
  * JSON casing was never decompiled, so every field this route reads is
@@ -94,6 +96,17 @@ const ZONE_STATE_MAP: Record<string, ZonePlaybackState> = {
 }
 
 export default async function agentRoutes(app: FastifyInstance) {
+  setClockCheckHooks({
+    push: (serverId, commandId) => {
+      pushToAgent(serverId, "ReceiveCommand", [{ commandId, type: "SYNC_CONFIG", zoneId: null, payload: null, sequence: 0 }])
+    },
+    save: (serverId, estimate) => {
+      savePcClockEstimate(serverId, estimate).catch(() => {})
+    },
+  })
+  loadPcClockEstimates()
+    .then((rows) => rows.forEach((r) => restoreClockEstimate(r.serverId, { errorMs: r.errorMs, at: r.at, timeZone: r.timeZone })))
+    .catch(() => {})
   const p = env.agentApiPrefix.replace(/\/$/, "")
 
   app.addHook("preHandler", async () => {
@@ -252,6 +265,20 @@ export default async function agentRoutes(app: FastifyInstance) {
           },
         })
         forgetAgent(previous.id)
+        await prisma.serverPrayerOverride
+          .findUnique({ where: { serverId: previous.id } })
+          .then((own) =>
+            own
+              ? prisma.serverPrayerOverride
+                  .upsert({
+                    where: { serverId: active.id },
+                    create: { serverId: active.id, prayers: own.prayers as Prisma.InputJsonValue },
+                    update: {},
+                  })
+                  .then(() => prisma.serverPrayerOverride.deleteMany({ where: { serverId: previous.id } }))
+              : null
+          )
+          .catch((err) => request.log.warn({ err, from: previous.id, to: active.id }, "could not move the server's own prayer settings"))
         await pushActivity({
           type: "SERVER_DISCONNECTED",
           message: `${previous.name} released — its agent re-paired to ${updated.name}.`,
@@ -372,7 +399,7 @@ export default async function agentRoutes(app: FastifyInstance) {
         issuedAt: c.issuedAt.toISOString(),
       }))
     )
-    return reply.send({ commands: items })
+    return reply.send({ commands: [...items, ...clockCheckCommands(ctx.serverId, Date.now(), items.length)] })
   })
 
   // --------------------------------------------------------------------
@@ -385,9 +412,10 @@ export default async function agentRoutes(app: FastifyInstance) {
     const ctx = await requireAgent(request)
     const body = request.body ?? {}
     const commandId = str(body, "commandId")
-    const status = str(body, "status")?.toUpperCase() as CommandStatus | undefined
+    let status = str(body, "status")?.toUpperCase() as CommandStatus | undefined
     if (!commandId || !status) throw badRequest("commandId and status are required.")
     if (!["EXECUTING", "SUCCESS", "FAILED", "TIMEOUT"].includes(status)) throw badRequest("Invalid status.")
+    if (clockCheckAck(ctx.serverId, commandId, status, Date.now())) return reply.send({ ok: true })
 
     const command = await prisma.remoteCommand.findUnique({ where: { id: commandId } })
     if (!command || command.serverId !== ctx.serverId) throw notFound("Command")
@@ -414,7 +442,16 @@ export default async function agentRoutes(app: FastifyInstance) {
       return reply.send({ ok: true, note: "Command already resolved; this ack was not applied." })
     }
 
-    const resultMessage = str(body, "resultMessage") ?? null
+    let resultMessage = str(body, "resultMessage") ?? null
+    const reportedZoneState = field(body, "zoneState") as Record<string, unknown> | null | undefined
+    if (status === "SUCCESS" && command.type === "SET_EQ" && (command.payload as Record<string, unknown> | null)?.mono === true && reportedZoneState?.mono !== true) {
+      status = "FAILED"
+      resultMessage = "This PC needs the newest venue installer before Mono can work."
+      if (command.zoneId) {
+        await prisma.zone.update({ where: { id: command.zoneId }, data: { equalizer: { ...(command.payload as Record<string, unknown>), mono: false } as Prisma.InputJsonValue } })
+        emitEvent({ type: "ZONE_STATUS_CHANGED", serverId: ctx.serverId, zoneId: command.zoneId, data: { zoneId: command.zoneId, source: "AGENT" } })
+      }
+    }
     const now = new Date()
     const updated = await prisma.remoteCommand.update({
       where: { id: commandId },
@@ -702,30 +739,38 @@ export default async function agentRoutes(app: FastifyInstance) {
   // the agent can pre-fetch tracks and keep playing offline.
   // --------------------------------------------------------------------
   app.post(`${p}/server/zone-playlists/sync`, async (request, reply) => {
+    const receivedAt = Date.now()
     const ctx = await requireAgent(request)
+    notePlaylistSync(ctx.serverId, receivedAt)
     const zones = await prisma.zone.findMany({ where: { serverId: ctx.serverId } })
+    const zoneById = new Map(zones.map((z) => [z.id, z]))
     const items = await Promise.all(
       zones.map(async (zone) => {
-        const playlist = zone.currentPlaylistId
-          ? await prisma.playlist.findUnique({ where: { id: zone.currentPlaylistId }, include: { tracks: { orderBy: { position: "asc" } } } })
+        // A Super Zones follower is handed its leader's assignment, not its own.
+        const source = (zone.leaderZoneId && zoneById.get(zone.leaderZoneId)) || zone
+        const playlist = source.currentPlaylistId
+          ? await prisma.playlist.findUnique({ where: { id: source.currentPlaylistId }, include: { tracks: { orderBy: { position: "asc" } } } })
           : null
         return {
           localZoneId: zone.localZoneId ?? zone.id,
           zoneId: zone.id,
-          playlistId: zone.currentPlaylistId,
+          playlistId: source.currentPlaylistId,
           // Randomised, not the order tracks were added — seeded on
           // zone+playlist so it stays put while this assignment lasts.
           trackIds: playlist
             ? seededShuffle(
                 playlist.tracks.map((t) => t.trackId),
-                `${zone.id}:${playlist.id}`
+                `${source.id}:${playlist.id}`
               )
             : [],
-          excludedTrackIds: zone.excludedTrackIds,
-          currentTrackId: zone.currentTrackId,
+          excludedTrackIds: source.excludedTrackIds,
+          currentTrackId: source.currentTrackId,
           // PUT /zones/:id/crossfade's value, or null (unset or not a valid
           // shape, which the venue treats as off). Older venue builds ignore it.
-          crossfade: toZoneCrossfade(zone.crossfade),
+          crossfade: toZoneCrossfade(source.crossfade),
+          // Only on a follower: the leader whose exact song the venue plays (agent 2026.11.4+),
+          // and the prayer it is paused for, so a newly linked follower is held from the start.
+          ...(source !== zone ? { followsLocalZoneId: source.localZoneId ?? source.id, ...(zone.pausedByPrayer ? { prayerHold: zone.pausedByPrayer } : {}) } : {}),
         }
       })
     )
@@ -742,11 +787,17 @@ export default async function agentRoutes(app: FastifyInstance) {
     const ctx = await requireAgent(request)
     const zones = await prisma.zone.findMany({
       where: { serverId: ctx.serverId },
-      select: { id: true, localZoneId: true, excludedTrackIds: true },
+      select: { id: true, localZoneId: true, excludedTrackIds: true, leaderZoneId: true },
     })
     const zoneIds = zones.map((z) => z.id)
     const localOf = new Map(zones.map((z) => [z.id, z.localZoneId ?? z.id]))
     const excludedOf = new Map(zones.map((z) => [z.id, z.excludedTrackIds]))
+    // Super Zones: a follower's own schedules are not served while it
+    // follows; it gets each of its leader's slots instead, under its own
+    // zone and an id of its own (the venue keys slot state by id + zone).
+    const following = new Set(zones.filter((z) => z.leaderZoneId && localOf.has(z.leaderZoneId)).map((z) => z.id))
+    const followersOf = new Map<string, string[]>()
+    for (const z of zones) if (following.has(z.id)) followersOf.set(z.leaderZoneId!, [...(followersOf.get(z.leaderZoneId!) ?? []), z.id])
     const schedules = await prisma.schedule.findMany({ where: { zoneId: { in: zoneIds }, enabled: true }, orderBy: { startTime: "asc" } })
 
     // Each slot's own track list, not just its playlistId: a schedule can
@@ -767,21 +818,33 @@ export default async function agentRoutes(app: FastifyInstance) {
     }
 
     markAgentSeen(ctx.serverId)
+    const items = schedules
+      .filter((s) => !following.has(s.zoneId))
+      .flatMap((s) => {
+        const item = {
+          id: s.id,
+          localZoneId: localOf.get(s.zoneId) ?? s.zoneId,
+          zoneId: s.zoneId,
+          playlistId: s.playlistId,
+          trackIds: seededShuffle(tracksByPlaylist.get(s.playlistId) ?? [], `${s.zoneId}:${s.playlistId}`),
+          excludedTrackIds: excludedOf.get(s.zoneId) ?? [],
+          name: s.name,
+          startTime: s.startTime,
+          endTime: s.endTime,
+          days: s.days,
+          priority: s.priority,
+          repeat: s.repeat,
+        }
+        return [item, ...(followersOf.get(s.zoneId) ?? []).map((f) => ({ ...item, id: `${s.id}:${f}`, localZoneId: localOf.get(f) ?? f, zoneId: f }))]
+      })
     return reply.send({
-      schedules: schedules.map((s) => ({
-        id: s.id,
-        localZoneId: localOf.get(s.zoneId) ?? s.zoneId,
-        zoneId: s.zoneId,
-        playlistId: s.playlistId,
-        trackIds: seededShuffle(tracksByPlaylist.get(s.playlistId) ?? [], `${s.zoneId}:${s.playlistId}`),
-        excludedTrackIds: excludedOf.get(s.zoneId) ?? [],
-        name: s.name,
-        startTime: s.startTime,
-        endTime: s.endTime,
-        days: s.days,
-        priority: s.priority,
-        repeat: s.repeat,
-      })),
+      schedules: [
+        ...items,
+        ...clockCheckSlots(ctx.serverId, items, ctx.server.reportedTimezone, Date.now(), () => {
+          const current = toMusicServer(ctx.server, 0, 0)
+          return current.latestAgentVersion !== null && current.agentVersionStatus === "current"
+        }),
+      ],
     })
   })
 }

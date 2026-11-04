@@ -19,6 +19,7 @@ enum Role {
   ORGANIZATION_ADMIN
   LOCATION_MANAGER
   VIEWER
+  SUPER_ORGANIZATION_ADMIN
 }
 
 enum OrganizationPlan {
@@ -309,6 +310,7 @@ model MusicServer {
   trackSyncState TrackSyncState[]
   alerts         Alert[]
   agentLink      AgentLink?
+  prayerOverride ServerPrayerOverride?
 
   @@index([organizationId])
   @@index([locationId])
@@ -414,11 +416,19 @@ model Zone {
   outputDeviceName String?
   reportedPlaylistId String?
 
+  // Super Zones: a follower plays its leader's schedules and playlist instead
+  // of its own (routes/super-zones.ts). One level only, same server only.
+  leaderZoneId        String?
+  leaderZone          Zone?   @relation("ZoneFollow", fields: [leaderZoneId], references: [id], onDelete: SetNull)
+  followers           Zone[]  @relation("ZoneFollow")
+  superZoneCopyVolume Boolean @default(false)
+
   schedules Schedule[]
   commands  RemoteCommand[]
 
   @@index([serverId])
   @@index([locationId])
+  @@index([leaderZoneId])
   @@unique([serverId, localZoneId])
 }
 
@@ -477,6 +487,7 @@ model MusicFolder {
   id        String   @id @default(cuid())
   name      String
   createdAt DateTime @default(now())
+  hidden    Boolean  @default(false)
 
   /// Same shared-catalogue convention as Track.organizationId above.
   organizationId String?
@@ -604,6 +615,14 @@ model PrayerConfig {
   calculationMethodId Int          @default(3)
   prayers             Json // Record<PrayerName, { enabled, offsetMinutes, pauseDurationMinutes }>
   updatedAt           DateTime     @updatedAt
+}
+
+model ServerPrayerOverride {
+  id        String      @id @default(cuid())
+  serverId  String      @unique
+  server    MusicServer @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  prayers   Json // Record<PrayerName, { enabled, offsetMinutes, pauseDurationMinutes }>
+  updatedAt DateTime    @updatedAt
 }
 
 model LogEntry {
