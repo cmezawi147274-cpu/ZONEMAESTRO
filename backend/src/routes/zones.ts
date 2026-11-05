@@ -9,6 +9,7 @@ import { queuePlaylistTracksForServer } from "../lib/zone-effects.js"
 import { pushToAgent } from "../lib/agent-registry.js"
 import { pushActivity } from "../lib/activity.js"
 import { scopedPlaylist, libraryReadWhere, assertPlaylistFitsZone } from "../lib/tenant.js"
+import { HIDE_CLOCK_ZONES } from "../lib/pc-clock.js"
 
 const withLeader = { leaderZone: { select: { name: true } } }
 
@@ -81,7 +82,7 @@ export default async function zonesRoutes(app: FastifyInstance) {
     }
     if (serverId) where.serverId = serverId
     if (locationId && !scope.locationId) where.locationId = locationId
-    const zones = await prisma.zone.findMany({ where, orderBy: { name: "asc" }, include: withLeader })
+    const zones = await prisma.zone.findMany({ where: { ...where, ...HIDE_CLOCK_ZONES }, orderBy: { name: "asc" }, include: withLeader })
     return reply.send(await withNowPlaying(zones))
   })
 

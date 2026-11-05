@@ -19,11 +19,11 @@ import { env } from "../lib/env.js"
 // MusicServer.organizationId being non-nullable to make the comparison fail.
 import { scopedServer } from "../lib/tenant.js"
 import { audit } from "../lib/audit.js"
-import { wantClockCheck } from "../lib/pc-clock.js"
+import { wantClockCheck, HIDE_CLOCK_ZONES } from "../lib/pc-clock.js"
 
 async function withExtras(server: { id: string }) {
   const [zoneCount, pendingSyncJobs] = await Promise.all([
-    prisma.zone.count({ where: { serverId: server.id } }),
+    prisma.zone.count({ where: { serverId: server.id, ...HIDE_CLOCK_ZONES } }),
     prisma.trackSyncState.count({ where: { serverId: server.id, status: { in: ["QUEUED_FOR_SYNC", "SYNCING"] } } }),
   ])
   return { zoneCount, pendingSyncJobs }

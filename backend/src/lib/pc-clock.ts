@@ -1,3 +1,5 @@
+import type { Prisma } from "@prisma/client"
+
 interface ScheduleSlotLike {
   id: string
   localZoneId: string
@@ -9,6 +11,7 @@ interface ScheduleSlotLike {
 
 const CLOCK_CHECK_ZONE = "cmmp-clock-check"
 const CLOCK_ANCHOR_ZONE = "cmmp-clock-anchor"
+export const HIDE_CLOCK_ZONES: Prisma.ZoneWhereInput = { OR: [{ localZoneId: null }, { NOT: { localZoneId: { startsWith: "cmmp-clock-" } } }] }
 const DAY_NAMES = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]
 const SEC = 1000
 const MIN = 60 * SEC

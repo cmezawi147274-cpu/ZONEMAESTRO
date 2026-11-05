@@ -6,6 +6,7 @@ import { forbidden, notFound, badRequest } from "../lib/http-error.js"
 import { scopedServer } from "../lib/tenant.js"
 import { pushToAgent } from "../lib/agent-registry.js"
 import type { Prisma } from "@prisma/client"
+import { HIDE_CLOCK_ZONES } from "../lib/pc-clock.js"
 
 type GroupZone = { id: string; name: string; leaderZoneId: string | null; superZoneCopyVolume: boolean }
 
@@ -82,7 +83,7 @@ export default async function superZonesRoutes(app: FastifyInstance) {
     if (!can(user.role, "zone:read")) throw forbidden()
     const server = await scopedServer(tenantScope(request), request.params.id)
     const zones = await prisma.zone.findMany({
-      where: { serverId: server.id },
+      where: { serverId: server.id, ...HIDE_CLOCK_ZONES },
       select: { id: true, name: true, leaderZoneId: true, superZoneCopyVolume: true },
       orderBy: { name: "asc" },
     })

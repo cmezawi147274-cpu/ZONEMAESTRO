@@ -3,6 +3,7 @@ import { prisma } from "../lib/db.js"
 import { requireAuth, requireUser, tenantScope } from "../lib/auth-context.js"
 import { can } from "../lib/rbac.js"
 import { forbidden } from "../lib/http-error.js"
+import { HIDE_CLOCK_ZONES } from "../lib/pc-clock.js"
 
 export default async function dashboardRoutes(app: FastifyInstance) {
   app.addHook("preHandler", requireAuth)
@@ -35,8 +36,8 @@ export default async function dashboardRoutes(app: FastifyInstance) {
 
     const [totalOrganizations, activeZones, playingZones, syncJobsInProgress, syncJobsFailed, openAlerts] = await Promise.all([
       scope.isSuperAdmin ? prisma.organization.count() : Promise.resolve(1),
-      prisma.zone.count({ where: { locationId: { in: locationIds }, playbackState: { not: "OFFLINE" } } }),
-      prisma.zone.count({ where: { locationId: { in: locationIds }, playbackState: "PLAYING" } }),
+      prisma.zone.count({ where: { locationId: { in: locationIds }, playbackState: { not: "OFFLINE" }, ...HIDE_CLOCK_ZONES } }),
+      prisma.zone.count({ where: { locationId: { in: locationIds }, playbackState: "PLAYING", ...HIDE_CLOCK_ZONES } }),
       prisma.trackSyncState.count({ where: { serverId: { in: serverIds }, status: { in: ["SYNCING", "QUEUED_FOR_SYNC"] } } }),
       prisma.trackSyncState.count({ where: { serverId: { in: serverIds }, status: "FAILED" } }),
       prisma.alert.count({

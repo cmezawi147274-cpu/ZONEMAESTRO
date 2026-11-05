@@ -5,11 +5,12 @@ import { requireAuth, requireUser, tenantScope } from "../lib/auth-context.js"
 import { can } from "../lib/rbac.js"
 import { badRequest, forbidden, notFound } from "../lib/http-error.js"
 import { audit } from "../lib/audit.js"
+import { HIDE_CLOCK_ZONES } from "../lib/pc-clock.js"
 
 async function withCounts(loc: { id: string }) {
   const [serverCount, zoneCount] = await Promise.all([
     prisma.musicServer.count({ where: { locationId: loc.id } }),
-    prisma.zone.count({ where: { locationId: loc.id } }),
+    prisma.zone.count({ where: { locationId: loc.id, ...HIDE_CLOCK_ZONES } }),
   ])
   return { serverCount, zoneCount }
 }
