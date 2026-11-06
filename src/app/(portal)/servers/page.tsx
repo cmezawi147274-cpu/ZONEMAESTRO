@@ -1,13 +1,15 @@
 "use client"
 
+import { useMemo, useState } from "react"
 import Link from "next/link"
-import { ServerCog } from "lucide-react"
+import { ServerCog, Search } from "lucide-react"
 import { PageHeader } from "@/components/common/page-header"
 import { EmptyState } from "@/components/common/empty-state"
 import { RoleGate } from "@/components/common/role-gate"
 import { ServerStatusBadge } from "@/components/common/status-badge"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Progress } from "@/components/ui/progress"
@@ -19,8 +21,19 @@ import { formatRelativeTime } from "@/lib/format"
 export default function ServersPage() {
   const { data: servers, isLoading } = useServers()
   const { data: locations } = useLocations()
+  const [search, setSearch] = useState("")
 
   const locationName = (id: string) => locations?.find((l) => l.id === id)?.name ?? "—"
+
+  const filteredServers = useMemo(() => {
+    const query = search.trim().toLowerCase()
+    if (!query) return servers
+    return servers?.filter(
+      (server) =>
+        server.name.toLowerCase().includes(query) ||
+        (locations?.find((l) => l.id === server.locationId)?.name ?? "").toLowerCase().includes(query)
+    )
+  }, [servers, locations, search])
 
   return (
     <div className="space-y-6">
@@ -33,6 +46,18 @@ export default function ServersPage() {
           </RoleGate>
         }
       />
+
+      {!isLoading && servers && servers.length > 0 && (
+        <div className="relative sm:max-w-sm">
+          <Search className="absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="Search servers…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-8"
+          />
+        </div>
+      )}
 
       <Card>
         <CardContent className="p-0">
@@ -49,6 +74,8 @@ export default function ServersPage() {
               description="Register a Windows MusicServer to generate a pairing code for a location."
               className="border-none"
             />
+          ) : !filteredServers || filteredServers.length === 0 ? (
+            <EmptyState icon={ServerCog} title="No matching servers" className="border-none py-10" />
           ) : (
             <Table>
               <TableHeader>
@@ -63,7 +90,7 @@ export default function ServersPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {servers.map((server) => (
+                {filteredServers.map((server) => (
                   <TableRow key={server.id}>
                     <TableCell>
                       <Link href={`/servers/${server.id}`} className="font-medium hover:underline">
