@@ -290,6 +290,8 @@ function daysOnWeekdayBefore(w: number, end: number): number {
 
 export type ZoneNow = { currentTrackId: string | null; playbackState: string }
 
+/** zoneId -> the start marker of its most recently started run (in memory): the next run never takes it. */
+const lastStarted = new Map<string, { markerId: string; playAt: number; at: number }>()
 /** Whether a slot was served as a one-song run at its start or as it is, for its window (in memory). */
 const forms = new Map<string, { once: boolean; at: number }>()
 /** The start marker a run was served with while it was the zone's next run (in memory; falls back safely). */
@@ -299,6 +301,7 @@ const runMarker = new Map<string, { markerId: string; at: number; started?: bool
 export function _resetRepeatOnce() {
   forms.clear()
   runMarker.clear()
+  lastStarted.clear()
   markersCached.clear()
 }
 
@@ -348,7 +351,7 @@ type Run = { slot: ServedSlot; o: Occurrence; token: string; isFirst: boolean; i
  */
 export function expandZoneSlots<T extends ServedSlot>(ctx: RepeatOnceContext | null, slots: T[], zone: ZoneNow | undefined, infoOf: (slot: T) => RunInfo): T[][] {
   if (!ctx) return slots.map((s) => [s])
-  for (const m of [forms, runMarker]) for (const [k, v] of m) if (ctx.now - v.at > MEMO_TTL_MS) m.delete(k)
+  for (const m of [forms, runMarker, lastStarted]) for (const [k, v] of m) if (ctx.now - v.at > MEMO_TTL_MS) m.delete(k)
   const loaded = zone?.currentTrackId ?? null
   const loadedMarker = loaded !== null && isEndMarkerTrackId(loaded) ? loaded : null
 
@@ -365,7 +368,7 @@ export function expandZoneSlots<T extends ServedSlot>(ctx: RepeatOnceContext | n
     const song = onceSongOf(slot)
     let qualifies = song !== null
     if (first && ctx.wall >= first.startWall && ctx.wall < first.endWall + KEEP_AFTER_END_MIN) {
-      const formKey = `${slot.id}|${slot.zoneId}|${first.day}`
+      const formKey = `${slot.id}|${slot.zoneId}|${first.day}|${w.start}-${w.end}`
       const had = forms.get(formKey)
       if (had) qualifies = had.once
       else forms.set(formKey, { once: qualifies, at: ctx.now })
@@ -405,19 +408,21 @@ export function expandZoneSlots<T extends ServedSlot>(ctx: RepeatOnceContext | n
   for (const [slot, { w, list }] of once) {
     list.forEach((o, i) => {
       const win = firstWin(slots, slot, o, w)
-      runs.push({ slot, o, token: String(o.day), isFirst: i === 0, index: indexOf({ slot, o }), win, marker: startMarkerAt(0) })
+      // The run's identity includes its times: a slot moved to new times is a new run (no saved position).
+      runs.push({ slot, o, token: `${o.day}w${w.start}-${w.end}`, isFirst: i === 0, index: indexOf({ slot, o }), win, marker: startMarkerAt(0) })
     })
   }
   // In the order they start playing (a run that takes over later starts then); ties: served order.
   const playAt = (r: Run) => r.o.startWall + (r.win ?? 0)
   runs.sort((a, b) => playAt(a) - playAt(b) || order.get(a.slot)! - order.get(b.slot)!)
-  const keyOf = (r: Run) => `${r.slot.id}|${r.slot.zoneId}|${r.o.day}`
+  const keyOf = (r: Run) => `${r.slot.id}|${r.slot.zoneId}|${r.token}`
   /** The next run's marker: its turn, unless the zone is loaded with it or a started run is served it. */
   const startMarkerFor = (r: Run, taken: string[]) => {
     const nominal = startMarkerAt(r.index)
     const own = runMarker.get(keyOf(r))?.markerId
-    if ((loadedMarker !== nominal || (playingMarker === nominal && own === nominal)) && !taken.includes(nominal)) return nominal
-    const avoid = [loadedMarker, startMarkerAt(r.index - 1), ...taken]
+    const last = lastStarted.get(r.slot.zoneId)?.markerId ?? null
+    if ((loadedMarker !== nominal || (playingMarker === nominal && own === nominal)) && !taken.includes(nominal) && last !== nominal) return nominal
+    const avoid = [loadedMarker, last, startMarkerAt(r.index - 1), ...taken]
     return START_MARKERS.find((m) => !avoid.includes(m)) ?? START_MARKERS.find((m) => m !== loadedMarker && !taken.includes(m)) ?? START_MARKERS.find((m) => m !== loadedMarker)!
   }
 
@@ -447,6 +452,8 @@ export function expandZoneSlots<T extends ServedSlot>(ctx: RepeatOnceContext | n
     runMarker.set(key, held)
     r.marker = held.markerId
     if (ctx.wall < r.o.endWall + KEEP_AFTER_END_MIN) active.push(r.marker)
+    const prevStart = lastStarted.get(r.slot.zoneId)
+    if (!prevStart || prevStart.playAt <= playAt(r)) lastStarted.set(r.slot.zoneId, { markerId: r.marker, playAt: playAt(r), at: ctx.now })
   }
   // The next run that can play: decided at every request until it starts. Later runs follow it in a
   // chain, each a different marker from the one before, so saved copies never repeat a marker twice in
@@ -487,7 +494,7 @@ export function expandZoneSlots<T extends ServedSlot>(ctx: RepeatOnceContext | n
     if (!mine) return [slot]
     return mine.map((r) => ({
       ...slot,
-      id: `${slot.id}~once${r.o.day}${r.isFirst && repairOf(slot.id, slot.zoneId, r.token) ? "r1" : ""}`,
+      id: `${slot.id}~once${r.token}${r.isFirst && repairOf(slot.id, slot.zoneId, r.token) ? "r1" : ""}`,
       days: [r.o.weekday],
       trackIds: [...slot.trackIds, r.marker],
     }))
