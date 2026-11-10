@@ -45,6 +45,7 @@ export function LoginHero() {
       <div className="relative flex min-h-screen flex-col justify-between p-10">
         {/* Icon + "Precision Audio Orchestration" lockup, baked into the one
             asset — screen-blended so its black background disappears. */}
+        <a href="https://zonemaestro.com" className="block w-fit">
         <Image
           src="/branding/login-mark-trimmed.png"
           alt="ZoneMaestro — Precision Audio Orchestration"
@@ -61,6 +62,7 @@ export function LoginHero() {
             filter: "contrast(1.25) drop-shadow(0 8px 22px rgba(0, 0, 0, 0.5))",
           }}
         />
+        </a>
 
         {/* The wordmark, set as live text rather than the source PNG. That
             art is 3D extruded lettering on a light card; inverting it to

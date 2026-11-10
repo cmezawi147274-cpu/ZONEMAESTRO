@@ -82,6 +82,7 @@ export default function LoginPage() {
       <section className="dark flex min-h-screen items-center justify-center bg-[#111111] px-6 py-12 sm:px-10">
         <div className="login-form-enter w-full max-w-sm">
           <div className="mb-10 lg:hidden">
+            <a href="https://zonemaestro.com" className="block w-fit">
             <Image
               src="/branding/login-mark-trimmed.png"
               alt="ZoneMaestro — Precision Audio Orchestration"
@@ -95,6 +96,7 @@ export default function LoginPage() {
                 filter: "contrast(1.25) drop-shadow(0 8px 22px rgba(0, 0, 0, 0.5))",
               }}
             />
+            </a>
           </div>
 
           <h2 className="text-[1.9rem] leading-tight font-bold text-white">Sign in</h2>
