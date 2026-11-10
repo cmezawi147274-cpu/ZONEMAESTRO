@@ -1,7 +1,9 @@
 import { prisma } from "./db.js"
+import { isEndMarkerStorageKey } from "./repeat-once.js"
+import { finishedRuns, forgetRun, markRepaired, repairCandidates, skipRepair } from "./repeat-once-watch.js"
 import { env } from "./env.js"
 import { pushActivity } from "./activity.js"
-import { forgetAgent, isAgentConnected } from "./agent-registry.js"
+import { forgetAgent, isAgentConnected, pushToAgent } from "./agent-registry.js"
 import fs from "node:fs"
 import path from "node:path"
 
@@ -184,7 +186,7 @@ export function startOrphanMediaSweep() {
       let removed = 0
       let bytes = 0
       for (const name of await fs.promises.readdir(dir)) {
-        if (known.has(name)) continue
+        if (known.has(name) || isEndMarkerStorageKey(name)) continue
         const full = path.join(dir, name)
         const stat = await fs.promises.stat(full).catch(() => null)
         if (!stat || !stat.isFile()) continue
@@ -203,6 +205,58 @@ export function startOrphanMediaSweep() {
   const kickoff = setTimeout(run, 5 * 60 * 1000)
   kickoff.unref()
   const timer = setInterval(run, ORPHAN_SWEEP_MS)
+  timer.unref()
+  return timer
+}
+
+/**
+ * Repeat-off one-song runs (lib/repeat-once-watch.ts). Every 2 s: a run
+ * whose song has not started is repaired - unless a person pressed Stop or
+ * Pause on that zone since just before the slot - and its venue is told to
+ * sync now (SYNC_CONFIG makes it fetch its schedules at once). Every 30 s: an
+ * Alert for each run that is over and did not go as it should.
+ */
+export const REPEAT_ONCE_ISSUER = "repeat-once"
+
+export function startRepeatOnceWatchSweep() {
+  let ticks = 0
+  let busy = false
+  const timer = setInterval(async () => {
+    if (busy) return
+    busy = true
+    try {
+      const now = Date.now()
+      const synced = new Set<string>()
+      for (const c of repairCandidates(now)) {
+        const stopped = await prisma.remoteCommand.count({
+          where: { zoneId: c.zoneId, type: { in: ["STOP", "PAUSE"] }, source: { in: ["USER", "SUPER_ADMIN"] }, issuedAt: { gte: new Date(c.startAt - 30_000) } },
+        })
+        if (stopped > 0) {
+          skipRepair(c.key)
+          continue
+        }
+        markRepaired(c.key, now)
+        if (synced.has(c.serverId)) continue
+        synced.add(c.serverId)
+        const command = await prisma.remoteCommand.create({
+          data: { serverId: c.serverId, type: "SYNC_CONFIG", status: "PENDING", source: "SCHEDULE", issuedById: REPEAT_ONCE_ISSUER },
+        })
+        pushToAgent(c.serverId, "ReceiveCommand", [{ commandId: command.id, type: "SYNC_CONFIG", zoneId: null, payload: null, sequence: null }])
+      }
+      if (++ticks % 15 === 0) {
+        for (const { key, alert, zoneId, startAt, replayed } of finishedRuns(now)) {
+          // Played again because a person pressed Play after it ended: as intended, no alert.
+          const byPerson = replayed && (await prisma.remoteCommand.count({ where: { zoneId, type: "PLAY", source: { in: ["USER", "SUPER_ADMIN"] }, issuedAt: { gte: new Date(startAt) } } })) > 0
+          if (alert && !byPerson) await prisma.alert.create({ data: { severity: alert.severity, title: alert.title, message: alert.message, serverId: alert.serverId } })
+          forgetRun(key)
+        }
+      }
+    } catch (err) {
+      console.warn("[repeat-once-watch] failed:", err)
+    } finally {
+      busy = false
+    }
+  }, 2_000)
   timer.unref()
   return timer
 }

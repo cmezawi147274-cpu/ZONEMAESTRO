@@ -25,10 +25,12 @@ import { pushActivity } from "../lib/activity.js"
 import { MUSIC_SERVER_HUB_PATH } from "../agent/signalrHub.js"
 import { isValidTimeZone } from "../lib/geo.js"
 import { signedMediaUrl } from "../lib/media-url.js"
+import { agentSupportsRepeatOnce, crossfadeHeld, endMarkersToOffer, expandZoneSlots, onceSongOf, repeatOnceContext, withoutEndMarkers, type ServedSlot } from "../lib/repeat-once.js"
+import { noteZoneReport } from "../lib/repeat-once-watch.js"
 import { ZONE_TRANSPORT_TYPES } from "./commands.js"
 import { ZONE_EFFECT_FIELD } from "../lib/zone-effects.js"
 import { toZoneCrossfade, toMusicServer } from "../lib/serialize.js"
-import { notePlaylistSync, clockCheckSlots, clockCheckCommands, clockCheckAck, setClockCheckHooks, restoreClockEstimate } from "../lib/pc-clock.js"
+import { notePlaylistSync, clockCheckSlots, clockCheckCommands, clockCheckAck, setClockCheckHooks, restoreClockEstimate, pcClockFor } from "../lib/pc-clock.js"
 import { loadPcClockEstimates, savePcClockEstimate } from "../lib/pc-clock-store.js"
 import type { CommandStatus, Prisma, ZonePlaybackState } from "@prisma/client"
 
@@ -337,7 +339,7 @@ export default async function agentRoutes(app: FastifyInstance) {
         diskPercent: num(body, "diskPercent") ?? ctx.server.diskPercent,
         diskFreeGb: num(body, "diskFreeGb") ?? ctx.server.diskFreeGb,
         diskTotalGb: num(body, "diskTotalGb") ?? ctx.server.diskTotalGb,
-        cachedTracks: num(body, "cachedTracks") ?? ctx.server.cachedTracks,
+        cachedTracks: withoutEndMarkersOrUndefined(ctx.serverId, num(body, "cachedTracks")) ?? ctx.server.cachedTracks,
         cachedSizeGb: num(body, "cachedSizeGb") ?? ctx.server.cachedSizeGb,
         ipAddress: str(body, "ipAddress") ?? ctx.server.ipAddress,
         autoBootEnabled: bool(body, "autoBootEnabled") ?? ctx.server.autoBootEnabled,
@@ -627,8 +629,19 @@ export default async function agentRoutes(app: FastifyInstance) {
     const cachedSizeGb = cachedStates.reduce((sum, s) => sum + s.track.fileSizeMb, 0) / 1024
     await prisma.musicServer.update({ where: { id: ctx.serverId }, data: { cachedTracks: cachedCount, cachedSizeGb } })
 
+    // The silent end markers a Repeat-off schedule with one song is served
+    // with (lib/repeat-once.ts): to every venue that has a Repeat-off
+    // schedule, until it reports them cached.
+    const missingMarkers = endMarkersToOffer(ctx.serverId, reportedTrackIds, signedMediaUrl)
+    const endMarkers =
+      missingMarkers.length > 0 &&
+      agentSupportsRepeatOnce(ctx.server.version) &&
+      (await prisma.schedule.count({ where: { enabled: true, repeat: false, zone: { serverId: ctx.serverId } } })) > 0
+        ? missingMarkers
+        : []
+
     return reply.send({
-      tracksToSync: queued.map((s) => ({
+      tracksToSync: [...queued.map((s) => ({
         trackId: s.trackId,
         title: s.track.title,
         artist: s.track.artist,
@@ -636,7 +649,7 @@ export default async function agentRoutes(app: FastifyInstance) {
         // Signed and expiring — /media/music/ is no longer an open
         // directory (see lib/media-url.ts).
         url: signedMediaUrl(s.track.storageKey),
-      })),
+      })), ...endMarkers],
     })
   })
 
@@ -705,6 +718,7 @@ export default async function agentRoutes(app: FastifyInstance) {
             },
           })
       mapping.push({ localZoneId, zoneId: zone.id })
+      noteZoneReport(zone.id, { playbackState: zone.playbackState, currentTrackId: zone.currentTrackId, heldForPrayer: zone.pausedByPrayer !== null }, Date.now())
       emitEvent({ type: "ZONE_STATUS_CHANGED", serverId: ctx.serverId, zoneId: zone.id, data: { zoneId: zone.id, source: "AGENT" } })
     }
 
@@ -745,6 +759,8 @@ export default async function agentRoutes(app: FastifyInstance) {
     notePlaylistSync(ctx.serverId, receivedAt)
     const zones = await prisma.zone.findMany({ where: { serverId: ctx.serverId } })
     const zoneById = new Map(zones.map((z) => [z.id, z]))
+    const onceSlotsOf = await zoneSlotsForRepeatOnce(ctx.serverId, ctx.server.version, zones)
+    const once = onceSlotsOf.size > 0 ? repeatOnceContext(ctx.serverId, ctx.server.version, ctx.server.reportedTimezone, receivedAt, venueWallMs(ctx.serverId, ctx.server.reportedTimezone, receivedAt)) : null
     const items = await Promise.all(
       zones.map(async (zone) => {
         // A Super Zones follower is handed its leader's assignment, not its own.
@@ -768,7 +784,8 @@ export default async function agentRoutes(app: FastifyInstance) {
           currentTrackId: source.currentTrackId,
           // PUT /zones/:id/crossfade's value, or null (unset or not a valid
           // shape, which the venue treats as off). Older venue builds ignore it.
-          crossfade: toZoneCrossfade(source.crossfade),
+          // Held off around a Repeat-off one-song run (lib/repeat-once.ts crossfadeHeld).
+          crossfade: crossfadeHeld(once, onceSlotsOf.get(source.id) ?? []) ? null : toZoneCrossfade(source.crossfade),
           // Only on a follower: the leader whose exact song the venue plays (agent 2026.11.4+),
           // and the prayer it is paused for, so a newly linked follower is held from the start.
           ...(source !== zone ? { followsLocalZoneId: source.localZoneId ?? source.id, ...(zone.pausedByPrayer ? { prayerHold: zone.pausedByPrayer } : {}) } : {}),
@@ -788,9 +805,10 @@ export default async function agentRoutes(app: FastifyInstance) {
     const ctx = await requireAgent(request)
     const zones = await prisma.zone.findMany({
       where: { serverId: ctx.serverId },
-      select: { id: true, localZoneId: true, excludedTrackIds: true, leaderZoneId: true },
+      select: { id: true, name: true, localZoneId: true, excludedTrackIds: true, leaderZoneId: true, currentTrackId: true, playbackState: true },
     })
     const zoneIds = zones.map((z) => z.id)
+    const zoneById = new Map(zones.map((z) => [z.id, z]))
     const localOf = new Map(zones.map((z) => [z.id, z.localZoneId ?? z.id]))
     const excludedOf = new Map(zones.map((z) => [z.id, z.excludedTrackIds]))
     // Super Zones: a follower's own schedules are not served while it
@@ -819,10 +837,9 @@ export default async function agentRoutes(app: FastifyInstance) {
     }
 
     markAgentSeen(ctx.serverId)
-    const items = schedules
+    const base = schedules
       .filter((s) => !following.has(s.zoneId))
-      .flatMap((s) => {
-        const item = {
+      .map((s) => ({
           id: s.id,
           localZoneId: localOf.get(s.zoneId) ?? s.zoneId,
           zoneId: s.zoneId,
@@ -835,9 +852,22 @@ export default async function agentRoutes(app: FastifyInstance) {
           days: s.days,
           priority: s.priority,
           repeat: s.repeat,
-        }
-        return [item, ...(followersOf.get(s.zoneId) ?? []).map((f) => ({ ...item, id: `${s.id}:${f}`, localZoneId: localOf.get(f) ?? f, zoneId: f }))]
-      })
+        }))
+    // Repeat off with one song plays it once (lib/repeat-once.ts): each zone's
+    // slots together, in served order, so the zone's winner is the agent's.
+    const now = Date.now()
+    const once = repeatOnceContext(ctx.serverId, ctx.server.version, ctx.server.reportedTimezone, now, venueWallMs(ctx.serverId, ctx.server.reportedTimezone, now))
+    const songSec = await songSecondsOf(once, base)
+    const copiesOf = new Map<(typeof base)[number], (typeof base)[number][]>()
+    for (const zoneId of new Set(base.map((b) => b.zoneId))) {
+      const mine = base.filter((b) => b.zoneId === zoneId)
+      const zone = zoneById.get(zoneId)
+      const expanded = expandZoneSlots(once, mine, zone, (b) => ({ title: `${ctx.server.name} / ${zone?.name ?? "zone"} / ${b.name}`, songSec: songSec(b) }))
+      mine.forEach((b, i) => copiesOf.set(b, expanded[i]))
+    }
+    const items = base.flatMap((b) =>
+      (copiesOf.get(b) ?? [b]).flatMap((item) => [item, ...(followersOf.get(b.zoneId) ?? []).map((f) => ({ ...item, id: `${item.id}:${f}`, localZoneId: localOf.get(f) ?? f, zoneId: f }))])
+    )
     return reply.send({
       schedules: [
         ...items,
@@ -848,4 +878,56 @@ export default async function agentRoutes(app: FastifyInstance) {
       ],
     })
   })
+}
+
+// ---------------------------------------------------------------------------
+// Repeat off with one song (lib/repeat-once.ts)
+// ---------------------------------------------------------------------------
+
+function withoutEndMarkersOrUndefined(serverId: string, cachedTracks: number | undefined): number | undefined {
+  return cachedTracks === undefined ? undefined : withoutEndMarkers(serverId, cachedTracks)
+}
+
+/** The venue's own wall clock (ms) when the cloud has measured it, else null. */
+function venueWallMs(serverId: string, timeZone: string | null, now: number): number | null {
+  try {
+    return pcClockFor(serverId, timeZone, now).wallMs
+  } catch {
+    return null
+  }
+}
+
+/** Seconds of each Repeat-off one-song slot's song (null when unknown). */
+async function songSecondsOf(once: ReturnType<typeof repeatOnceContext>, slots: ServedSlot[]): Promise<(s: ServedSlot) => number | null> {
+  const songs = new Set<string>()
+  if (once) for (const s of slots) {
+    const song = onceSongOf(s) ?? (s.repeat === false ? s.trackIds.find((id) => !s.excludedTrackIds.includes(id)) : undefined)
+    if (song) songs.add(song)
+  }
+  const tracks = songs.size > 0 ? await prisma.track.findMany({ where: { id: { in: [...songs] } }, select: { id: true, durationSec: true } }) : []
+  const secOf = new Map(tracks.map((t) => [t.id, t.durationSec > 0 ? t.durationSec : null]))
+  return (s) => {
+    const song = onceSongOf(s) ?? s.trackIds.find((id) => !s.excludedTrackIds.includes(id))
+    return song ? secOf.get(song) ?? null : null
+  }
+}
+
+/**
+ * zoneId -> all of its enabled schedules as served (same order as GET
+ * /server/schedules), when it has a Repeat-off one and the agent supports
+ * repeat-once; for crossfadeHeld.
+ */
+async function zoneSlotsForRepeatOnce(serverId: string, version: string | null, zones: { id: string; excludedTrackIds: string[] }[]) {
+  const out = new Map<string, ServedSlot[]>()
+  if (!agentSupportsRepeatOnce(version)) return out
+  const schedules = await prisma.schedule.findMany({ where: { enabled: true, zone: { serverId } }, orderBy: { startTime: "asc" } })
+  if (!schedules.some((s) => s.repeat === false)) return out
+  // Tracks only matter for Repeat-off slots; the others are needed for their times and priorities.
+  const rows = await prisma.playlistTrack.findMany({ where: { playlistId: { in: [...new Set(schedules.filter((s) => s.repeat === false).map((s) => s.playlistId))] } }, orderBy: { position: "asc" }, select: { playlistId: true, trackId: true } })
+  const excludedOf = new Map(zones.map((z) => [z.id, z.excludedTrackIds]))
+  for (const s of schedules) {
+    const slot: ServedSlot = { id: s.id, zoneId: s.zoneId, trackIds: rows.filter((r) => r.playlistId === s.playlistId).map((r) => r.trackId), excludedTrackIds: excludedOf.get(s.zoneId) ?? [], startTime: s.startTime, endTime: s.endTime, days: s.days, repeat: s.repeat, priority: s.priority }
+    out.set(s.zoneId, [...(out.get(s.zoneId) ?? []), slot])
+  }
+  return out
 }

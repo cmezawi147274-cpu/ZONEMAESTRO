@@ -9,6 +9,7 @@ import { env, publicApiUrlProblem, assertSecretsAreNotPlaceholders } from "./lib
 import { HttpError } from "./lib/http-error.js"
 import { initRealtime } from "./realtime.js"
 import { SIGNED_PREFIX, verifyMediaRequest } from "./lib/media-url.js"
+import { ensureEndMarkerFiles } from "./lib/repeat-once.js"
 
 import authRoutes from "./routes/auth.js"
 import organizationsRoutes from "./routes/organizations.js"
@@ -30,7 +31,7 @@ import superZonesRoutes from "./routes/super-zones.js"
 import downloadsRoutes from "./routes/downloads.js"
 import agentRoutes from "./routes/agent.js"
 import { attachMusicServerHub } from "./agent/signalrHub.js"
-import { startAgentHeartbeatSweep, startUnpairedRetentionSweep, startRetentionSweep, startOrphanMediaSweep } from "./lib/agent-sweep.js"
+import { startAgentHeartbeatSweep, startUnpairedRetentionSweep, startRetentionSweep, startOrphanMediaSweep, startRepeatOnceWatchSweep } from "./lib/agent-sweep.js"
 import { startPrayerScheduler } from "./lib/prayer-scheduler.js"
 import { prisma } from "./lib/db.js"
 
@@ -146,6 +147,8 @@ app.addHook("onRequest", async (request, reply) => {
 })
 
 await app.register(fastifyStatic, { root: env.musicStorageDir, prefix: SIGNED_PREFIX, decorateReply: false })
+// The silent end markers Repeat-off schedules with one song are served with (lib/repeat-once.ts).
+ensureEndMarkerFiles(env.musicStorageDir)
 
 app.setErrorHandler((error, request, reply) => {
   // Echoed back so a venue's own agent.log line ("vk-3f9a… failed") can be
@@ -236,7 +239,7 @@ await app.register(agentRoutes)
 await app.listen({ port: env.port, host: "0.0.0.0" })
 initRealtime(app.server)
 attachMusicServerHub(app.server)
-const sweeps = [startAgentHeartbeatSweep(), startUnpairedRetentionSweep(), startRetentionSweep(), startOrphanMediaSweep()]
+const sweeps = [startAgentHeartbeatSweep(), startUnpairedRetentionSweep(), startRetentionSweep(), startOrphanMediaSweep(), startRepeatOnceWatchSweep()]
 // Prayer Mode executes here, not in a browser tab: pauses must keep
 // happening with the portal closed. See lib/prayer-scheduler.ts.
 sweeps.push(startPrayerScheduler())
