@@ -82,8 +82,8 @@ export default async function locationsRoutes(app: FastifyInstance) {
     const existing = await prisma.location.findUnique({ where: { id: request.params.id } })
     if (!existing) throw notFound("Location")
     if (!scope.isSuperAdmin && existing.organizationId !== scope.organizationId) throw notFound("Location")
-    const { latitude: _lat, longitude: _lng, organizationId: _org, ...rest } = request.body
-    const loc = await prisma.location.update({ where: { id: existing.id }, data: rest })
+    const { name, address, city, region, country, timezone } = request.body
+    const loc = await prisma.location.update({ where: { id: existing.id }, data: { name, address, city, region, country, timezone } })
     const { serverCount, zoneCount } = await withCounts(loc)
     return reply.send(toLocation(loc, serverCount, zoneCount))
   })

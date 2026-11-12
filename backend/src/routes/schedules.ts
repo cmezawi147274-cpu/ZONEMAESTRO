@@ -5,6 +5,7 @@ import { requireAuth, requireUser, tenantScope } from "../lib/auth-context.js"
 import { can } from "../lib/rbac.js"
 import { forbidden, notFound, badRequest } from "../lib/http-error.js"
 import { scopedZone, scopedServer, scopedPlaylist, allowedLocationIds, assertPlaylistFitsZone } from "../lib/tenant.js"
+import { audit, scheduleRecords } from "../lib/audit.js"
 
 const DAYS = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"] as const
 type DayOfWeek = (typeof DAYS)[number]
@@ -194,7 +195,15 @@ export default async function schedulesRoutes(app: FastifyInstance) {
     const existing = await prisma.schedule.findUnique({ where: { id: request.params.id } })
     if (!existing) throw notFound("Schedule")
     await scopedZone(tenantScope(request), existing.zoneId)
+    const [record] = await scheduleRecords({ id: existing.id })
     await prisma.schedule.delete({ where: { id: existing.id } })
+    await audit(request, {
+      action: "schedule.delete",
+      targetType: "Schedule",
+      targetId: existing.id,
+      summary: record ? `Deleted schedule "${record.name}" (${record.startTime}-${record.endTime}) on ${record.server} / ${record.zone}.` : `Deleted schedule "${existing.name}".`,
+      metadata: record ?? existing,
+    })
     return reply.status(204).send()
   })
 }

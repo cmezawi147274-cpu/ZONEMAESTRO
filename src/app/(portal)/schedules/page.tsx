@@ -10,6 +10,17 @@ import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 import { ScheduleFormDialog } from "@/components/schedules/schedule-form-dialog"
 import { useSchedules, useToggleSchedule, useDeleteSchedule } from "@/hooks/use-schedules"
 import { useZones } from "@/hooks/use-zones"
@@ -92,9 +103,25 @@ export default function SchedulesPage() {
                       <RoleGate permission="schedule:write">
                         <div className="flex justify-end gap-1">
                           <ScheduleFormDialog schedule={schedule} />
-                          <Button variant="ghost" size="icon-sm" onClick={() => remove.mutate(schedule.id)}>
-                            <Trash2 className="size-3.5" />
-                          </Button>
+                          <AlertDialog>
+                            <AlertDialogTrigger render={
+                              <Button variant="ghost" size="icon-sm">
+                                <Trash2 className="size-3.5" />
+                              </Button>
+                            } />
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Delete &quot;{schedule.name}&quot;?</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  {zoneName(schedule.zoneId)} will stop playing {playlistName(schedule.playlistId)} at {schedule.startTime}–{schedule.endTime}. This cannot be undone.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                <AlertDialogAction onClick={() => remove.mutate(schedule.id)}>Delete</AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
                         </div>
                       </RoleGate>
                     </TableCell>

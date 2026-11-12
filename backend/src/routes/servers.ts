@@ -18,7 +18,7 @@ import { env } from "../lib/env.js"
 // non-super caller whose own organizationId is null, rather than relying on
 // MusicServer.organizationId being non-nullable to make the comparison fail.
 import { scopedServer } from "../lib/tenant.js"
-import { audit } from "../lib/audit.js"
+import { audit, scheduleRecords } from "../lib/audit.js"
 import { wantClockCheck, HIDE_CLOCK_ZONES } from "../lib/pc-clock.js"
 
 async function withExtras(server: { id: string }) {
@@ -114,12 +114,13 @@ export default async function serversRoutes(app: FastifyInstance) {
     const user = requireUser(request)
     if (!can(user.role, "server:write")) throw forbidden()
     const target = await scopedServer(tenantScope(request), request.params.id)
+    const removedSchedules = await scheduleRecords({ zone: { serverId: target.id } })
     await prisma.musicServer.delete({ where: { id: target.id } })
     // Lets a still-running agent's next call get SERVER_DELETED instead of
     // the indistinguishable-from-a-typo AGENT_TOKEN_UNKNOWN — see
     // lib/agent-auth.ts and the DeletedServerTombstone model.
     await prisma.deletedServerTombstone.upsert({ where: { id: target.id }, create: { id: target.id }, update: {} })
-    await audit(request, { action: "server.delete", targetType: "MusicServer", targetId: target.id, summary: `Deleted server "${target.name}".`, metadata: { organizationId: target.organizationId, locationId: target.locationId } })
+    await audit(request, { action: "server.delete", targetType: "MusicServer", targetId: target.id, summary: `Deleted server "${target.name}" and ${removedSchedules.length} schedule(s) on its zones.`, metadata: { organizationId: target.organizationId, locationId: target.locationId, removedSchedules } })
     return reply.status(204).send()
   })
 

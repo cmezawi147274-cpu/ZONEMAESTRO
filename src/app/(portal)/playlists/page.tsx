@@ -117,8 +117,7 @@ export default function PlaylistsPage() {
                         <AlertDialogHeader>
                           <AlertDialogTitle>Delete &quot;{playlist.name}&quot;?</AlertDialogTitle>
                           <AlertDialogDescription>
-                            Zones currently assigned this playlist will keep playing their cached copy
-                            until reassigned.
+                            Every schedule that uses this playlist will be deleted too, at every venue. This cannot be undone.
                           </AlertDialogDescription>
                         </AlertDialogHeader>
                         <AlertDialogFooter>

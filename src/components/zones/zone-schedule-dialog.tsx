@@ -12,6 +12,17 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 import { EmptyState } from "@/components/common/empty-state"
 import { RoleGate } from "@/components/common/role-gate"
 import { ScheduleFormDialog } from "@/components/schedules/schedule-form-dialog"
@@ -72,9 +83,25 @@ export function ZoneScheduleDialog({ zone, trigger }: { zone: Zone; trigger: Rea
                 <RoleGate anyOf={["schedule:write", "zone:assign"]}>
                   <div className="flex shrink-0 items-center gap-1">
                     <ScheduleFormDialog schedule={s} zoneId={zone.id} />
-                    <Button variant="ghost" size="icon-sm" disabled={remove.isPending} onClick={() => remove.mutate(s.id)}>
-                      <Trash2 className="size-3.5" />
-                    </Button>
+                    <AlertDialog>
+                      <AlertDialogTrigger render={
+                        <Button variant="ghost" size="icon-sm" disabled={remove.isPending}>
+                          <Trash2 className="size-3.5" />
+                        </Button>
+                      } />
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Delete &quot;{s.name}&quot;?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            {zone.name} will stop playing {playlistName(s.playlistId)} at {s.startTime}–{s.endTime}. This cannot be undone.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction onClick={() => remove.mutate(s.id)}>Delete</AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
                   </div>
                 </RoleGate>
               </div>

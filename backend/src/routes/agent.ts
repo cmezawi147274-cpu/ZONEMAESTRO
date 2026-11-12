@@ -27,6 +27,8 @@ import { isValidTimeZone } from "../lib/geo.js"
 import { signedMediaUrl } from "../lib/media-url.js"
 import { agentSupportsRepeatOnce, crossfadeHeld, endMarkersToOffer, expandZoneSlots, onceSongOf, repeatOnceContext, withoutEndMarkers, type ServedSlot } from "../lib/repeat-once.js"
 import { noteZoneReport } from "../lib/repeat-once-watch.js"
+import { audit, scheduleRecords } from "../lib/audit.js"
+import { noteStateLoss, noteZoneStates, noteZonesMissing } from "../lib/zone-watchdog.js"
 import { ZONE_TRANSPORT_TYPES } from "./commands.js"
 import { ZONE_EFFECT_FIELD } from "../lib/zone-effects.js"
 import { toZoneCrossfade, toMusicServer } from "../lib/serialize.js"
@@ -89,6 +91,11 @@ async function localZoneIdOf(zoneId: string | null): Promise<string | null> {
   const zone = await prisma.zone.findUnique({ where: { id: zoneId }, select: { localZoneId: true } })
   return zone?.localZoneId ?? zoneId
 }
+
+const ZONE_PRUNE_GRACE_MS = 30 * 60 * 1000
+const zoneMissingSince = new Map<string, number>()
+const lastZonesReportAt = new Map<string, number>()
+const ZONE_REPORT_GAP_MS = 2 * 60 * 1000
 
 const ZONE_STATE_MAP: Record<string, ZonePlaybackState> = {
   PLAYING: "PLAYING",
@@ -608,6 +615,37 @@ export default async function agentRoutes(app: FastifyInstance) {
       await pushActivity({ type: "MUSIC_SYNC_COMPLETED", message: `${cachedTrackIds.length} track(s) cached on ${ctx.server.name}.`, serverId: ctx.serverId })
     }
 
+    const servedZones = await prisma.zone.findMany({ where: { serverId: ctx.serverId, leaderZoneId: null }, select: { id: true, currentPlaylistId: true } })
+    const neededPlaylistIds = new Set<string>()
+    for (const z of servedZones) if (z.currentPlaylistId) neededPlaylistIds.add(z.currentPlaylistId)
+    const neededSchedules = await prisma.schedule.findMany({ where: { enabled: true, zoneId: { in: servedZones.map((z) => z.id) } }, select: { playlistId: true } })
+    for (const s of neededSchedules) neededPlaylistIds.add(s.playlistId)
+    const neededTracks = neededPlaylistIds.size
+      ? await prisma.playlistTrack.findMany({ where: { playlistId: { in: Array.from(neededPlaylistIds) } }, select: { trackId: true } })
+      : []
+    const reportedSet = new Set(reportedTrackIds)
+    const notReported = Array.from(new Set(neededTracks.map((t) => t.trackId))).filter((id) => !reportedSet.has(id))
+    if (Array.isArray(cachedTrackIdsRaw) && notReported.length > 0) {
+      const known = await prisma.trackSyncState.findMany({ where: { serverId: ctx.serverId, trackId: { in: notReported } }, select: { trackId: true } })
+      const knownIds = new Set(known.map((k) => k.trackId))
+      const fresh = notReported.filter((id) => !knownIds.has(id))
+      if (fresh.length > 0) {
+        await prisma.trackSyncState.createMany({
+          data: fresh.map((trackId) => ({ trackId, serverId: ctx.serverId, status: "QUEUED_FOR_SYNC" as const, progressPercent: 0 })),
+          skipDuplicates: true,
+        })
+      }
+      await prisma.trackSyncState.updateMany({
+        where: { serverId: ctx.serverId, trackId: { in: notReported }, status: "AVAILABLE_IN_CLOUD" },
+        data: { status: "QUEUED_FOR_SYNC", progressPercent: 0, errorMessage: null },
+      })
+      const lost = await prisma.trackSyncState.updateMany({
+        where: { serverId: ctx.serverId, trackId: { in: notReported }, status: "CACHED_ON_SERVER" },
+        data: { status: "QUEUED_FOR_SYNC", progressPercent: 0, errorMessage: null },
+      })
+      if (lost.count > 0) noteStateLoss(ctx.serverId)
+    }
+
     const handOut = {
       serverId: ctx.serverId,
       OR: [
@@ -672,6 +710,7 @@ export default async function agentRoutes(app: FastifyInstance) {
     const zones = zonesReported ? zonesRaw : []
 
     const mapping: { localZoneId: string; zoneId: string }[] = []
+    const reportedStates: { id: string; playbackState: string }[] = []
     for (const raw of zones) {
       if (!raw || typeof raw !== "object") continue
       const z = raw as Record<string, unknown>
@@ -718,6 +757,7 @@ export default async function agentRoutes(app: FastifyInstance) {
             },
           })
       mapping.push({ localZoneId, zoneId: zone.id })
+      reportedStates.push({ id: zone.id, playbackState: zone.playbackState })
       noteZoneReport(zone.id, { playbackState: zone.playbackState, currentTrackId: zone.currentTrackId, heldForPrayer: zone.pausedByPrayer !== null }, Date.now())
       emitEvent({ type: "ZONE_STATUS_CHANGED", serverId: ctx.serverId, zoneId: zone.id, data: { zoneId: zone.id, source: "AGENT" } })
     }
@@ -728,6 +768,7 @@ export default async function agentRoutes(app: FastifyInstance) {
     // ever touches rows with a real localZoneId (never a cloud-only zone
     // that simply hasn't synced yet, since those have localZoneId null).
     if (zonesReported) {
+      noteZoneStates(ctx.serverId, reportedStates)
       const reportedLocalIds = mapping.map((m) => m.localZoneId)
       const staleZones = await prisma.zone.findMany({
         where: {
@@ -735,12 +776,37 @@ export default async function agentRoutes(app: FastifyInstance) {
           localZoneId: { not: null },
           NOT: { localZoneId: { in: reportedLocalIds } },
         },
-        select: { id: true },
+        select: { id: true, name: true, localZoneId: true },
+      })
+      for (const m of mapping) zoneMissingSince.delete(m.zoneId)
+      noteZonesMissing(staleZones.map((z) => z.id))
+      const now = Date.now()
+      const previousReportAt = lastZonesReportAt.get(ctx.serverId)
+      lastZonesReportAt.set(ctx.serverId, now)
+      const continuous = previousReportAt !== undefined && now - previousReportAt <= ZONE_REPORT_GAP_MS
+      const expired = staleZones.filter((z) => {
+        const since = (continuous && zoneMissingSince.get(z.id)) || now
+        zoneMissingSince.set(z.id, since)
+        return now - since >= ZONE_PRUNE_GRACE_MS
       })
       if (staleZones.length > 0) {
-        await prisma.zone.deleteMany({ where: { id: { in: staleZones.map((z) => z.id) } } })
-        for (const z of staleZones) {
-          emitEvent({ type: "ZONE_STATUS_CHANGED", serverId: ctx.serverId, zoneId: z.id, data: { zoneId: z.id, source: "AGENT" } })
+        const marked = await prisma.zone.updateMany({ where: { id: { in: staleZones.map((z) => z.id) }, playbackState: { not: "OFFLINE" } }, data: { playbackState: "OFFLINE" } })
+        if (expired.length > 0) {
+          const removedSchedules = await scheduleRecords({ zoneId: { in: expired.map((z) => z.id) } })
+          await prisma.zone.deleteMany({ where: { id: { in: expired.map((z) => z.id) } } })
+          for (const z of expired) zoneMissingSince.delete(z.id)
+          await audit(request, {
+            action: "zone.prune",
+            targetType: "Zone",
+            summary: `${ctx.server.name} stopped reporting ${expired.map((z) => `"${z.name}"`).join(", ")} for 30 minutes; removed with ${removedSchedules.length} schedule(s).`,
+            metadata: { serverId: ctx.serverId, zones: expired, removedSchedules },
+            actorEmailOverride: `venue PC ${ctx.server.name}`,
+          })
+        }
+        if (marked.count > 0 || expired.length > 0) {
+          for (const z of staleZones) {
+            emitEvent({ type: "ZONE_STATUS_CHANGED", serverId: ctx.serverId, zoneId: z.id, data: { zoneId: z.id, source: "AGENT" } })
+          }
         }
       }
     }

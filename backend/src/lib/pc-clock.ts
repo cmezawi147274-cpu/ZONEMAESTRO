@@ -212,7 +212,7 @@ function stateOf(serverId: string): ServerClock {
   return st
 }
 
-function zoneOffsetMs(timeZone: string | null, at: number): number | null {
+export function zoneOffsetMs(timeZone: string | null, at: number): number | null {
   if (!timeZone) return null
   try {
     const parts = new Intl.DateTimeFormat("en-US", {

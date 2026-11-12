@@ -45,7 +45,7 @@ export function attachMusicServerHub(httpServer: HttpServer) {
     }
     if (url.pathname !== MUSIC_SERVER_HUB_PATH) return // not ours — leave for socket.io / anything else
     wss.handleUpgrade(req, socket, head, (ws) => {
-      void handleConnection(ws, url)
+      handleConnection(ws, url).catch(() => ws.close(1011, "Server error"))
     })
   })
 

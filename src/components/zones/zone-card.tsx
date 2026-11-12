@@ -188,7 +188,7 @@ export function ZoneCard({
                 <AlertDialogHeader>
                   <AlertDialogTitle>Delete &quot;{zone.name}&quot;?</AlertDialogTitle>
                   <AlertDialogDescription>
-                    This removes the zone from the cloud AND from the Windows Music Server. This cannot be undone.
+                    This removes the zone and all of its schedules from the cloud AND from the Windows Music Server. This cannot be undone.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>

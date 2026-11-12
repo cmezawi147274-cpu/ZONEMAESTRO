@@ -8,6 +8,7 @@ import { forbidden, notFound, badRequest, conflict } from "../lib/http-error.js"
 import { queuePlaylistTracksForServer } from "../lib/zone-effects.js"
 import { pushToAgent } from "../lib/agent-registry.js"
 import { pushActivity } from "../lib/activity.js"
+import { audit, scheduleRecords } from "../lib/audit.js"
 import { scopedPlaylist, libraryReadWhere, assertPlaylistFitsZone } from "../lib/tenant.js"
 import { HIDE_CLOCK_ZONES } from "../lib/pc-clock.js"
 
@@ -250,7 +251,9 @@ export default async function zonesRoutes(app: FastifyInstance) {
     const user = requireUser(request)
     if (!can(user.role, "zone:assign")) throw forbidden()
     const zone = await scopedZone(tenantScope(request), request.params.id)
+    const removedSchedules = await scheduleRecords({ zoneId: zone.id })
     await prisma.zone.delete({ where: { id: zone.id } })
+    await audit(request, { action: "zone.delete", targetType: "Zone", targetId: zone.id, summary: `Deleted zone "${zone.name}" and its ${removedSchedules.length} schedule(s).`, metadata: { serverId: zone.serverId, localZoneId: zone.localZoneId, removedSchedules } })
 
     if (zone.localZoneId) {
       const command = await prisma.remoteCommand.create({

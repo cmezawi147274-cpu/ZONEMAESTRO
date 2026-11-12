@@ -126,9 +126,9 @@ export default function ServerDetailPage(props: PageProps<"/servers/[id]">) {
                     <AlertDialogHeader>
                       <AlertDialogTitle>Remove this server?</AlertDialogTitle>
                       <AlertDialogDescription>
-                        This unpairs {server.name} from the cloud portal. Its local cache and zones are
-                        unaffected on the Windows machine, but it will stop receiving cloud commands and
-                        updates until re-registered.
+                        This unpairs {server.name} from the cloud portal and deletes all of its cloud zones,
+                        schedules and prayer settings. It will stop receiving cloud commands and updates
+                        until re-registered. This cannot be undone.
                       </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>

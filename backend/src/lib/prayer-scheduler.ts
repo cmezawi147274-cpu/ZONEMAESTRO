@@ -6,6 +6,7 @@ import { getTimingsForDate } from "./prayer-times.js"
 import { addDays, calendarDateKey, todayInTimeZone, zonedTimeToUtc } from "./timezone-math.js"
 import { PRAYER_NAMES, type PrayerName } from "./constants.js"
 import { agentVersionStatus } from "./version.js"
+import { notePrayerWindow } from "./zone-watchdog.js"
 import type { Location, Prisma, PrayerConfig, Zone } from "@prisma/client"
 
 /**
@@ -350,6 +351,7 @@ async function tickLocation(
       const endKey = `${keyPrefix}:${prayer}${keySuffix}:end`
 
       if (now < startAt) {
+        if (startAt.getTime() - now.getTime() <= 2 * 60_000) notePrayerWindow(place.id, endAt.getTime())
         if (!fired.has(startKey)) {
           await firePrayerEndIfZonesStillPaused(config, prayer, place.id, group, { leftover: true, mayBeOpen: mayBeOpen(prayer, settings, true) })
         }
@@ -372,6 +374,7 @@ async function tickLocation(
       }
 
       // Inside the pause window.
+      notePrayerWindow(place.id, endAt.getTime())
       if (!fired.has(startKey)) {
         fired.add(startKey)
         await firePrayerStart(config, prayer, place.id, group)

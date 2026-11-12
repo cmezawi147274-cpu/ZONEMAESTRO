@@ -1,4 +1,5 @@
 import type { FastifyRequest } from "fastify"
+import type { Prisma } from "@prisma/client"
 import { prisma } from "./db.js"
 
 /**
@@ -63,5 +64,47 @@ export async function audit(request: FastifyRequest, entry: AuditEntry): Promise
     })
   } catch (err) {
     request.log.warn({ err, action: entry.action }, "audit log write failed")
+  }
+}
+
+export async function auditSystem(entry: AuditEntry): Promise<void> {
+  try {
+    await prisma.auditLog.create({
+      data: {
+        actorEmail: entry.actorEmailOverride ?? "system",
+        actorRole: "NONE",
+        action: entry.action,
+        targetType: entry.targetType,
+        targetId: entry.targetId ?? null,
+        summary: entry.summary,
+        metadata: entry.metadata === undefined ? undefined : (safeMetadata(entry.metadata) as never),
+      },
+    })
+  } catch {
+    // best-effort, like audit()
+  }
+}
+
+export async function scheduleRecords(where: Prisma.ScheduleWhereInput) {
+  try {
+    const rows = await prisma.schedule.findMany({
+      where,
+      include: { zone: { select: { name: true, server: { select: { name: true } } } }, playlist: { select: { name: true } } },
+    })
+    return rows.map((s) => ({
+      id: s.id,
+      name: s.name,
+      server: s.zone.server.name,
+      zone: s.zone.name,
+      playlist: s.playlist.name,
+      startTime: s.startTime,
+      endTime: s.endTime,
+      days: s.days,
+      enabled: s.enabled,
+      repeat: s.repeat,
+      priority: s.priority,
+    }))
+  } catch {
+    return []
   }
 }

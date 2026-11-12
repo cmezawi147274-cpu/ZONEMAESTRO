@@ -9,7 +9,7 @@ import { requireAuth, requireUser, tenantScope, type TenantScope } from "../lib/
 import { can } from "../lib/rbac.js"
 import { forbidden, notFound, badRequest, conflict } from "../lib/http-error.js"
 import { queuePlaylistTracksForServer } from "../lib/zone-effects.js"
-import { audit } from "../lib/audit.js"
+import { audit, scheduleRecords } from "../lib/audit.js"
 import { scopedPlaylist, scopedAssignmentTarget, canMutateOwned, assertPlaylistFitsZone } from "../lib/tenant.js"
 import type { PlaylistTargetType } from "@prisma/client"
 import { env } from "../lib/env.js"
@@ -290,8 +290,9 @@ export default async function playlistsRoutes(app: FastifyInstance) {
     const scope = tenantScope(request)
     const existing = await scopedPlaylist(scope, request.params.id)
     if (!canMutateOwned(scope, existing.organizationId)) throw notFound("Playlist")
+    const removedSchedules = await scheduleRecords({ playlistId: existing.id })
     await prisma.playlist.delete({ where: { id: existing.id } })
-    await audit(request, { action: "playlist.delete", targetType: "Playlist", targetId: existing.id, summary: `Deleted playlist ${existing.id}.` })
+    await audit(request, { action: "playlist.delete", targetType: "Playlist", targetId: existing.id, summary: `Deleted playlist "${existing.name}" (${existing.id}) and ${removedSchedules.length} schedule(s) that used it.`, metadata: { removedSchedules } })
     return reply.status(204).send()
   })
 

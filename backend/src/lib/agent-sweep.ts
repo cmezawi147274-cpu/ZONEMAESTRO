@@ -3,6 +3,7 @@ import { isEndMarkerStorageKey } from "./repeat-once.js"
 import { finishedRuns, forgetRun, markRepaired, repairCandidates, skipRepair } from "./repeat-once-watch.js"
 import { env } from "./env.js"
 import { pushActivity } from "./activity.js"
+import { auditSystem, scheduleRecords } from "./audit.js"
 import { forgetAgent, isAgentConnected, pushToAgent } from "./agent-registry.js"
 import fs from "node:fs"
 import path from "node:path"
@@ -62,7 +63,11 @@ export function startUnpairedRetentionSweep() {
         select: { id: true, name: true },
       })
       for (const server of abandoned) {
+        const removedSchedules = await scheduleRecords({ zone: { serverId: server.id } })
         await prisma.musicServer.delete({ where: { id: server.id } })
+        if (removedSchedules.length > 0) {
+          await auditSystem({ action: "server.auto_remove", targetType: "MusicServer", targetId: server.id, summary: `Unpaired server "${server.name}" removed automatically with ${removedSchedules.length} schedule(s).`, metadata: { removedSchedules } })
+        }
         await pushActivity({
           type: "SERVER_DISCONNECTED",
           message: `${server.name} removed automatically — never paired, and its pairing code has been expired for over ${env.agentUnpairedRetentionDays} day(s).`,
