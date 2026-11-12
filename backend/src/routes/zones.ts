@@ -82,7 +82,7 @@ export default async function zonesRoutes(app: FastifyInstance) {
       }
     }
     if (serverId) where.serverId = serverId
-    if (locationId && !scope.locationId) where.locationId = locationId
+    if (locationId && !scope.locationId) where.AND = [{ locationId }]
     const zones = await prisma.zone.findMany({ where: { ...where, ...HIDE_CLOCK_ZONES }, orderBy: { name: "asc" }, include: withLeader })
     return reply.send(await withNowPlaying(zones))
   })

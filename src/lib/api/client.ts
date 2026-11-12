@@ -74,7 +74,16 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   return (await res.json()) as T
 }
 
-async function tryRefresh(): Promise<boolean> {
+let refreshing: Promise<boolean> | null = null
+
+function tryRefresh(): Promise<boolean> {
+  refreshing ??= doRefresh().finally(() => {
+    refreshing = null
+  })
+  return refreshing
+}
+
+async function doRefresh(): Promise<boolean> {
   const session = readSession()
   if (!session) return false
   try {

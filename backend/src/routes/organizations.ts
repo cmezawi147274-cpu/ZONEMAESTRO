@@ -66,9 +66,10 @@ export default async function organizationsRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const user = requireUser(request)
       if (!can(user.role, "org:write")) throw forbidden()
+      const { name, contactName, contactEmail, plan, status } = request.body
       const org = await prisma.organization.update({
         where: { id: request.params.id },
-        data: request.body as never,
+        data: { name, contactName, contactEmail, plan, status } as never,
       })
       const { locationCount, serverCount } = await withCounts(org)
       return reply.send(toOrganization(org, locationCount, serverCount))

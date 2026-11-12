@@ -108,9 +108,9 @@ export default async function monitoringRoutes(app: FastifyInstance) {
       const servers = await prisma.musicServer.findMany({ where: { organizationId: scope.organizationId }, select: { id: true } })
       where.serverId = { in: servers.map((s) => s.id) }
     }
-    if (serverId) where.serverId = serverId
+    if (serverId) where.AND = [{ serverId }]
     if (level) where.level = level
-    const logs = await prisma.logEntry.findMany({ where, orderBy: { timestamp: "desc" }, take: Number(limit ?? 200) })
+    const logs = await prisma.logEntry.findMany({ where, orderBy: { timestamp: "desc" }, take: Math.max(-1000, Math.min(Number(limit ?? 200), 1000)) })
     return reply.send(logs.map(toLogEntry))
   })
 }
