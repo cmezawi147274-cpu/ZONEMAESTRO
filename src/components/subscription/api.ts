@@ -20,6 +20,7 @@ export interface SubscriptionEvent {
   crossedAt?: string
   format?: string
   note?: string
+  to?: string
   by?: { userId: string; email: string }
   reminderDays?: number[]
   previousEndsAt?: string

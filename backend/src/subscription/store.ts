@@ -168,6 +168,11 @@ const REMINDERS_SQL = `UPDATE ${TABLE} AS r SET
   WHERE r.server_id = $1
   RETURNING r.*`
 
+const REMINDER_EMAILED_SQL = `UPDATE ${TABLE} AS r SET
+    events = r.events || ${event("reminder_emailed", "$2", `, 'thresholds', $3::jsonb, 'to', $4::text, 'endsAt', ${iso("r.ends_at")}`)}
+  WHERE r.server_id = $1 AND r.ends_at = $5::timestamptz
+  RETURNING r.*`
+
 const DISMISS_SQL = `UPDATE ${TABLE} AS r SET
     dismissed = r.dismissed || jsonb_build_array(jsonb_build_object('term', jsonb_array_length(r.terms), 'threshold', $2::int, 'at', ${iso("$3::timestamptz")}))
   WHERE r.server_id = $1
@@ -431,6 +436,10 @@ export function saveNotes(serverId: string, notes: string, actor: Actor, at: Dat
 
 export function saveReminders(serverId: string, reminderDays: number[], actor: Actor, at: Date) {
   return update(REMINDERS_SQL, serverId, JSON.stringify(reminderDays), at.toISOString(), JSON.stringify(actor))
+}
+
+export function recordReminderEmailed(serverId: string, thresholds: number[], to: string, endsAt: string, at: Date) {
+  return update(REMINDER_EMAILED_SQL, serverId, at.toISOString(), JSON.stringify(thresholds), to, endsAt)
 }
 
 export function dismissBanner(serverId: string, threshold: number, at: Date) {

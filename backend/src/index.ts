@@ -34,6 +34,7 @@ import agentRoutes from "./routes/agent.js"
 import { attachMusicServerHub } from "./agent/signalrHub.js"
 import { startAgentHeartbeatSweep, startUnpairedRetentionSweep, startRetentionSweep, startOrphanMediaSweep, startRepeatOnceWatchSweep } from "./lib/agent-sweep.js"
 import { startZoneWatchdogSweep } from "./lib/zone-watchdog.js"
+import { startSubscriptionReminderEmailSweep } from "./subscription/reminder-email.js"
 import { startPrayerScheduler } from "./lib/prayer-scheduler.js"
 import { prisma } from "./lib/db.js"
 
@@ -248,6 +249,7 @@ const sweeps = [startAgentHeartbeatSweep(), startUnpairedRetentionSweep(), start
 // Prayer Mode executes here, not in a browser tab: pauses must keep
 // happening with the portal closed. See lib/prayer-scheduler.ts.
 sweeps.push(startPrayerScheduler())
+sweeps.push(startSubscriptionReminderEmailSweep())
 app.log.info(`CMMP backend listening on 0.0.0.0:${env.port}, realtime namespace /realtime, agent API at ${env.agentApiPrefix}`)
 
 /**

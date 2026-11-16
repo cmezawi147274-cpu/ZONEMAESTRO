@@ -245,3 +245,43 @@ export async function sendNewUserInviteEmail(input: InviteEmailInput): Promise<b
     text: renderInviteText({ ...input, firstName }),
   })
 }
+
+export interface SubscriptionReminderEmailInput {
+  to: string
+  threshold: number
+  serverName: string
+  organizationName: string | null
+  /** Already formatted, e.g. "2027-03-01 09:00 UTC". */
+  endsAt: string
+  timeLeft: string
+  /** Portal path of the server's subscription page. */
+  link: string
+}
+
+/** Never throws; returns whether the mail went out. */
+export async function sendSubscriptionReminderEmail(input: SubscriptionReminderEmailInput): Promise<boolean> {
+  const { to, threshold, serverName, organizationName, endsAt, timeLeft } = input
+  const esc = escapeHtml
+  const url = `${env.publicApiUrl}${input.link}`
+  const days = `${threshold} day${threshold === 1 ? "" : "s"}`
+  const rows: [string, string][] = [
+    ["Server", serverName],
+    ["Organization", organizationName ?? "—"],
+    ["Ends", endsAt],
+    ["Time left", timeLeft],
+  ]
+  return sendMail({
+    to,
+    subject: `Subscription reminder (${days}): ${serverName} ends ${endsAt.slice(0, 10)}`,
+    text: [`Subscription reminder: ${days} before the end`, "", ...rows.map(([k, v]) => `${k}: ${v}`), "", url, ""].join("\n"),
+    html: `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8" /><title>Subscription reminder</title></head>
+<body style="margin:0;padding:24px;font-family:Inter,Helvetica,Arial,sans-serif;font-size:14px;">
+  <p style="font-size:18px;font-weight:600;margin:0 0 16px 0;">Subscription reminder: ${esc(days)} before the end</p>
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+    ${rows.map(([k, v]) => `<tr><td style="padding:4px 16px 4px 0;">${esc(k)}</td><td style="padding:4px 0;font-weight:600;">${esc(v)}</td></tr>`).join("\n    ")}
+  </table>
+  <p style="margin:20px 0 0 0;"><a href="${esc(url)}">Open the subscription page</a></p>
+</body></html>`,
+  })
+}

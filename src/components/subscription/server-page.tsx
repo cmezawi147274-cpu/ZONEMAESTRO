@@ -68,6 +68,8 @@ function eventLabel(e: SubscriptionEvent): string {
       return `Note saved${e.by ? ` by ${e.by.email}` : ""}`
     case "reminders_saved":
       return `Reminders saved${e.by ? ` by ${e.by.email}` : ""}`
+    case "reminder_emailed":
+      return `Reminder emailed to ${e.to}`
     case "exported":
       return `Exported (${e.format === "text" ? "summary" : "JSON"})${e.by ? ` by ${e.by.email}` : ""}`
     case "renewal_confirmed":
@@ -258,7 +260,7 @@ function Content({ server, record, now }: { server: ServerInfo; record: Subscrip
       <Card>
         <CardHeader>
           <CardTitle>Reminders</CardTitle>
-          <CardDescription>Shown on this page only.</CardDescription>
+          <CardDescription>Shown on this page and emailed to accounts@smartsolutionsme.com.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           {REMINDER_DAYS.map((days) => (
