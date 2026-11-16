@@ -116,6 +116,7 @@ export default async function authRoutes(app: FastifyInstance) {
       where: { userId: user.id, revokedAt: null },
       data: { revokedAt: new Date() },
     })
+    await prisma.pushDevice.deleteMany({ where: { userId: user.id } })
     await audit(request, { action: "auth.logout", targetType: "User", targetId: user.id, summary: `${user.email} signed out of all sessions.` })
     return reply.status(204).send()
   })

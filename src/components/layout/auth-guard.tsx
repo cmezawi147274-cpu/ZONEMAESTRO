@@ -4,6 +4,7 @@ import { useEffect } from "react"
 import { useRouter, usePathname } from "next/navigation"
 import { Loader2 } from "lucide-react"
 import { useAuth } from "@/hooks/use-auth"
+import { usePushRegistration } from "@/hooks/use-push-registration"
 import { AppShell } from "@/components/layout/app-shell"
 import { requiredPermissionFor } from "@/components/layout/nav-items"
 import { landingRoute } from "@/lib/auth/rbac"
@@ -22,6 +23,8 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   // bounce to whatever that role's home actually is.
   const required = requiredPermissionFor(pathname)
   const permitted = !required || can(required)
+
+  usePushRegistration(isAuthenticated)
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {

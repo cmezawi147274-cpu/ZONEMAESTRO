@@ -14,6 +14,7 @@
 import type { FastifyInstance } from "fastify"
 import { randomUUID } from "node:crypto"
 import { prisma } from "../lib/db.js"
+import { notifyAlert } from "../lib/push.js"
 import { env } from "../lib/env.js"
 import { badRequest, notFound, HttpError } from "../lib/http-error.js"
 import { requireAgent, generateAgentToken, sha256Hex } from "../lib/agent-auth.js"
@@ -575,7 +576,7 @@ export default async function agentRoutes(app: FastifyInstance) {
           message: `${ctx.server.name}: ${resultMessage ?? "The Windows Music Server reported failure with no further detail."}`,
           serverId: ctx.serverId,
         },
-      })
+      }).then(notifyAlert)
     }
 
     markAgentSeen(ctx.serverId)

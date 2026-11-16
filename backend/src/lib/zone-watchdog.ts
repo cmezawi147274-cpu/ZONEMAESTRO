@@ -1,4 +1,5 @@
 import { prisma } from "./db.js"
+import { notifyAlert } from "./push.js"
 import { isAgentConnected, pushToAgent } from "./agent-registry.js"
 import { pcClockFor, zoneOffsetMs } from "./pc-clock.js"
 import { pushActivity } from "./activity.js"
@@ -154,7 +155,7 @@ async function issuePlay(zone: { id: string; serverId: string }) {
 async function raiseAlert(severity: "warning" | "critical", title: string, message: string, serverId: string, now: number) {
   const recent = await prisma.alert.count({ where: { serverId, title, createdAt: { gte: new Date(now - ALERT_REPEAT_MS) } } })
   if (recent > 0) return
-  await prisma.alert.create({ data: { severity, title, message, serverId } })
+  await prisma.alert.create({ data: { severity, title, message, serverId } }).then(notifyAlert)
 }
 
 async function sweep(now: number, checkAlerts: boolean) {

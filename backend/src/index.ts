@@ -25,6 +25,7 @@ import syncRoutes from "./routes/sync.js"
 import usersRoutes from "./routes/users.js"
 import dashboardRoutes from "./routes/dashboard.js"
 import monitoringRoutes from "./routes/monitoring.js"
+import pushRoutes from "./routes/push.js"
 import prayerRoutes from "./routes/prayer.js"
 import serverPrayerRoutes from "./routes/server-prayer.js"
 import superZonesRoutes from "./routes/super-zones.js"
@@ -220,6 +221,7 @@ await app.register(
     await api.register(usersRoutes)
     await api.register(dashboardRoutes)
     await api.register(monitoringRoutes)
+    await api.register(pushRoutes)
     await api.register(prayerRoutes)
     await api.register(serverPrayerRoutes)
     await api.register(superZonesRoutes)
