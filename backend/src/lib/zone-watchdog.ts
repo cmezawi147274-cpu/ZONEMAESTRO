@@ -21,8 +21,11 @@ const OFFLINE_ALERT_MAX_AGE_MS = 7 * 24 * 60 * 60_000
 const ALERT_REPEAT_MS = 24 * 60 * 60_000
 const PERSON_STOP_LOOKBACK_MS = 24 * 60 * 60_000
 const COMMAND_EXPIRY_MS = 60_000
+const STOPPED_RESTART_MS = 60_000
+const STOPPED_MAX_ATTEMPTS = 3
 
 type Dropout = { since: number; lastOfflineAt: number; attempts: number; lastAttemptAt: number }
+type StoppedRun = { slotId: string; since: number; attempts: number; lastAttemptAt: number }
 type Slot = { id: string; name: string; startTime: string; endTime: string; days: string[]; priority: number; repeat: boolean }
 
 const bootAt = Date.now()
@@ -31,6 +34,7 @@ const stateLossAt = new Map<string, number>()
 const dropouts = new Map<string, Dropout>()
 const prayerOpenUntil = new Map<string, number>()
 const notPlayingSince = new Map<string, { slotId: string; since: number }>()
+const stoppedRuns = new Map<string, StoppedRun>()
 const lastPlayingAt = new Map<string, number>()
 const lastLiveState = new Map<string, string>()
 const missingNow = new Set<string>()
@@ -264,6 +268,31 @@ async function sweep(now: number, checkAlerts: boolean) {
         }
       }
 
+      if (!pcTimeKnown || !slot || !slot.repeat || zone.playbackState !== "STOPPED" || prayerHold || missingNow.has(zone.id) || dropouts.has(zone.id)) {
+        stoppedRuns.delete(zone.id)
+      } else {
+        const run = stoppedRuns.get(zone.id)
+        if (!run || run.slotId !== slot.id) {
+          stoppedRuns.set(zone.id, { slotId: slot.id, since: now, attempts: 0, lastAttemptAt: 0 })
+        } else if (now - run.since >= STOPPED_RESTART_MS && run.attempts < STOPPED_MAX_ATTEMPTS && now - run.lastAttemptAt >= RETRY_MS) {
+          if (await personStoppedSince(zone.id, (lastPlayingAt.get(zone.id) ?? now - PERSON_STOP_LOOKBACK_MS) - 60_000)) {
+            run.attempts = STOPPED_MAX_ATTEMPTS
+          } else {
+            run.attempts++
+            run.lastAttemptAt = now
+            await issuePlay(zone)
+            if (run.attempts === 1) {
+              await pushActivity({
+                type: "PLAYBACK_CHANGED",
+                message: `${zone.name} on ${server.name} stopped on its own during "${slot.name}" — restarting it.`,
+                serverId: server.id,
+                zoneId: zone.id,
+              })
+            }
+          }
+        }
+      }
+
       if (!checkAlerts) continue
       if (!slot || !slot.repeat || zone.playbackState === "PLAYING" || prayerHold || missingNow.has(zone.id)) {
         notPlayingSince.delete(zone.id)
@@ -291,6 +320,7 @@ async function sweep(now: number, checkAlerts: boolean) {
   const known = new Set(servers.flatMap((sv) => sv.zones.map((z) => z.id)))
   for (const id of lastLiveState.keys()) if (!known.has(id)) lastLiveState.delete(id)
   for (const id of missingNow) if (!known.has(id)) missingNow.delete(id)
+  for (const id of stoppedRuns.keys()) if (!known.has(id)) stoppedRuns.delete(id)
 }
 
 export function startZoneWatchdogSweep() {
