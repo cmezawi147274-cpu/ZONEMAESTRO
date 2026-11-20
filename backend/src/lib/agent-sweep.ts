@@ -1,6 +1,6 @@
 import { prisma } from "./db.js"
 import { notifyAlert } from "./push.js"
-import { isEndMarkerStorageKey } from "./repeat-once.js"
+import { agentPlaysOnceNatively, isEndMarkerStorageKey } from "./repeat-once.js"
 import { finishedRuns, forgetRun, markRepaired, repairCandidates, skipRepair } from "./repeat-once-watch.js"
 import { env } from "./env.js"
 import { pushActivity } from "./activity.js"
@@ -253,7 +253,8 @@ export function startRepeatOnceWatchSweep() {
         for (const { key, alert, zoneId, startAt, replayed } of finishedRuns(now)) {
           // Played again because a person pressed Play after it ended: as intended, no alert.
           const byPerson = replayed && (await prisma.remoteCommand.count({ where: { zoneId, type: "PLAY", source: { in: ["USER", "SUPER_ADMIN"] }, issuedAt: { gte: new Date(startAt) } } })) > 0
-          if (alert && !byPerson) await prisma.alert.create({ data: { severity: alert.severity, title: alert.title, message: alert.message, serverId: alert.serverId } }).then(notifyAlert)
+          const native = alert && agentPlaysOnceNatively((await prisma.musicServer.findUnique({ where: { id: alert.serverId }, select: { version: true } }))?.version)
+          if (alert && !byPerson && !native) await prisma.alert.create({ data: { severity: alert.severity, title: alert.title, message: alert.message, serverId: alert.serverId } }).then(notifyAlert)
           forgetRun(key)
         }
       }

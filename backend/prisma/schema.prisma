@@ -78,6 +78,9 @@ enum CommandType {
   REBOOT_SERVER
   SET_AUTO_BOOT
   FORGET_SERVER
+  UPDATE_SOFTWARE
+  UNLOCK_SCREEN
+  SET_LOCK_PASSWORD
 }
 
 enum ZonePlaybackState {
@@ -316,6 +319,11 @@ model MusicServer {
   // /servers/:id/pairing-code) before the old one was ever used. Lets a
   // late attempt with the stale code say "revoked" instead of "unknown".
   pairingRevokedCodeHash    String?
+  // Last health / remote-update reports from the agent heartbeat (lib/agent-reports.ts).
+  agentHealth               Json?
+  agentHealthAt             DateTime?
+  agentUpdate               Json?
+  agentUpdateAt             DateTime?
 
   zones          Zone[]
   commands       RemoteCommand[]

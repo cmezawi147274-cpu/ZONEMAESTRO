@@ -8,6 +8,7 @@ import { pushActivity } from "../lib/activity.js"
 import { applyZoneCommandEffect } from "../lib/zone-effects.js"
 import { isAgentConnected, pushToAgent, waitForAck } from "../lib/agent-registry.js"
 import { env } from "../lib/env.js"
+import { hashLockPassword, isValidLockPassword } from "../lib/lock-password.js"
 import type { CommandType, CommandSource, Zone } from "@prisma/client"
 import type { Prisma } from "@prisma/client"
 
@@ -23,6 +24,8 @@ export const ZONE_TRANSPORT_TYPES = new Set<CommandType>(["PLAY", "PAUSE", "STOP
 const FOLLOWER_LOCKED_TYPES = new Set<CommandType>(["PLAY", "PAUSE", "STOP", "NEXT", "PREVIOUS"])
 const MIRRORED_TYPES = new Set<CommandType>(["PLAY", "PAUSE", "STOP"])
 const VOLUME_TYPES = new Set<CommandType>(["SET_VOLUME", "MUTE", "UNMUTE"])
+// Venue PC software update and screen lock (kit 2026.11.20+): Super Admin only, whole server only.
+const SUPER_ADMIN_SERVER_TYPES = new Set<CommandType>(["UPDATE_SOFTWARE", "UNLOCK_SCREEN", "SET_LOCK_PASSWORD"])
 
 /** Servers this caller may address: their own venue (VIEWER), otherwise
  * their organization. Super admins are unrestricted (null = no filter). */
@@ -146,7 +149,8 @@ export default async function commandsRoutes(app: FastifyInstance) {
     "/commands",
     async (request, reply) => {
       const user = requireUser(request)
-      const { serverId, zoneId, type, payload } = request.body
+      const { serverId, zoneId, type } = request.body
+      let payload = request.body.payload
       // Transport is the only thing a playback-only role may issue; every
       // other command type (sync, restart, reboot) needs server:command.
       // FORGET_SERVER is the exception in the other direction: it shuts the
@@ -156,11 +160,12 @@ export default async function commandsRoutes(app: FastifyInstance) {
       // it through the generic Send Command dialog.
       if (ZONE_TRANSPORT_TYPES.has(type)) {
         if (!can(user.role, "zone:control")) throw forbidden()
-      } else if (type === "FORGET_SERVER") {
+      } else if (type === "FORGET_SERVER" || SUPER_ADMIN_SERVER_TYPES.has(type)) {
         if (!can(user.role, "server:forget")) throw forbidden()
       } else if (!can(user.role, "server:command")) {
         throw forbidden()
       }
+      if (SUPER_ADMIN_SERVER_TYPES.has(type) && zoneId) throw badRequest(`${type.replaceAll("_", " ")} applies to the whole server, not a zone.`)
 
       // Scope before anything is written: an id from another organization
       // (or another venue, for a location-bound role) is not addressable,
@@ -176,6 +181,18 @@ export default async function commandsRoutes(app: FastifyInstance) {
       if (target?.leaderZoneId && (FOLLOWER_LOCKED_TYPES.has(type) || VOLUME_TYPES.has(type))) {
         const leader = await prisma.zone.findUnique({ where: { id: target.leaderZoneId } })
         if (leader && (FOLLOWER_LOCKED_TYPES.has(type) || leader.superZoneCopyVolume)) throw conflict(`This zone follows ${leader.name}.`)
+      }
+      if (SUPER_ADMIN_SERVER_TYPES.has(type)) {
+        if (type === "SET_LOCK_PASSWORD") {
+          // Only the hash is stored, delivered or shown; the plaintext goes no further than here.
+          const password = payload?.password
+          request.body.payload = undefined
+          if (!isValidLockPassword(password)) throw badRequest("The lock password must be 4 to 128 characters.")
+          payload = await hashLockPassword(password)
+          request.body.payload = payload
+        } else {
+          payload = {}
+        }
       }
 
       // The only client-supplied source ever trusted is "SCHEDULE" (Prayer

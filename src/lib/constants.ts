@@ -77,6 +77,9 @@ export const COMMAND_TYPES = [
   "REBOOT_SERVER",
   "SET_AUTO_BOOT",
   "FORGET_SERVER",
+  "UPDATE_SOFTWARE",
+  "UNLOCK_SCREEN",
+  "SET_LOCK_PASSWORD",
 ] as const
 export type CommandType = (typeof COMMAND_TYPES)[number]
 

@@ -78,9 +78,16 @@ export function isEndMarkerStorageKey(name: string): boolean {
   return MARKER_KEYS.has(name)
 }
 
-/** The agent behaviour this was worked out against is kit 2026.11.4; later kits inherit it. */
+/** The agent behaviour this was worked out against is kit 2026.11.4; kit 2026.11.20 plays once natively instead. */
 export function agentSupportsRepeatOnce(version: string | null | undefined): boolean {
-  return agentVersionStatus(version, REPEAT_ONCE_MIN_AGENT_VERSION) === "current"
+  return agentVersionStatus(version, REPEAT_ONCE_MIN_AGENT_VERSION) === "current" && !agentPlaysOnceNatively(version)
+}
+
+/** Agents from this version play a one-song repeat-off slot once by themselves: no end markers, no watch. */
+export const REPEAT_ONCE_NATIVE_AGENT_VERSION = "2026.11.20"
+
+export function agentPlaysOnceNatively(version: string | null | undefined): boolean {
+  return agentVersionStatus(version, REPEAT_ONCE_NATIVE_AGENT_VERSION) === "current"
 }
 
 // ---------------------------------------------------------------------------

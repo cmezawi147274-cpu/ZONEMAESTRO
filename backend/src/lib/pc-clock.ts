@@ -164,6 +164,9 @@ interface ServerClock {
 }
 
 const servers = new Map<string, ServerClock>()
+// Clock offsets the agent (kit 2026.11.20+) measures itself and sends on its heartbeat.
+const DIRECT_FRESH_MS = 5 * MIN
+const direct = new Map<string, { clockOffsetMs: number; rttMs: number; utcOffsetMinutes: number; at: number }>()
 const timers = new Map<string, { at: number; timer: ReturnType<typeof setTimeout> }>()
 let hooks: { push: (serverId: string, commandId: string) => void; save: (serverId: string, estimate: ServerClock["estimate"]) => void; now: () => number } = { push: () => {}, save: () => {}, now: () => Date.now() }
 let triggerSeq = 0
@@ -893,7 +896,7 @@ export function clockCheckSlots(serverId: string, realSlots: ScheduleSlotLike[],
     stepPassive(st, realSlots, now)
     if (st.check && (now - st.check.startedAt > CHECK_TIMEOUT_MS || now - st.check.lastGetAt > STALL_MS)) fail(st, now)
     const wanted = st.wantedAt !== null && now - st.wantedAt < WANT_MS
-    if (!st.check && !backingOff(st, now) && (wanted || !freshFor(st, now, BACKGROUND_REFRESH_MS)) && isEligible()) {
+    if (!st.check && !backingOff(st, now) && (wanted || !freshFor(st, now, BACKGROUND_REFRESH_MS)) && !freshDirect(serverId, now) && isEligible()) {
       st.wantedAt = null
       st.check = newCheck(now, st.zone ?? 0, true)
       st.check.fast?.changes.push(now)
@@ -913,14 +916,25 @@ export function clockCheckSlots(serverId: string, realSlots: ScheduleSlotLike[],
   }
 }
 
+export function noteDirectClock(serverId: string, d: { clockOffsetMs: number; rttMs: number; utcOffsetMinutes: number }, now = Date.now()) {
+  direct.set(serverId, { clockOffsetMs: d.clockOffsetMs, rttMs: d.rttMs, utcOffsetMinutes: d.utcOffsetMinutes, at: now })
+}
+
+function freshDirect(serverId: string, now: number) {
+  const d = direct.get(serverId)
+  return d && now - d.at < DIRECT_FRESH_MS ? d : null
+}
+
 export function wantClockCheck(serverId: string, eligible: boolean, now = Date.now()) {
-  if (!eligible) return
+  if (!eligible || freshDirect(serverId, now)) return
   const st = stateOf(serverId)
   if (st.check || freshFor(st, now, REFRESH_AFTER_MS) || backingOff(st, now)) return
   st.wantedAt = now
 }
 
 export function pcClockFor(serverId: string, timeZone: string | null, now = Date.now()): { wallMs: number | null; measuring: boolean } {
+  const d = freshDirect(serverId, now)
+  if (d) return { wallMs: now + d.utcOffsetMinutes * 60_000 + d.clockOffsetMs, measuring: false }
   const st = servers.get(serverId)
   if (!st) return { wallMs: null, measuring: false }
   const estimate = st.estimate && st.estimate.timeZone === timeZone && now - st.estimate.at < ESTIMATE_TTL_MS ? st.estimate : null

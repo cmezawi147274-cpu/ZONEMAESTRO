@@ -20,9 +20,11 @@ import { COMMAND_TYPES, type CommandType } from "@/lib/constants"
 
 // Not offered here: the venue refuses REBOOT_SERVER, FORGET_SERVER needs the
 // server page's Forget flow, and SET_EQ / SET_VOLUME need values this dialog
-// has no fields for (the zone card sends those).
+// has no fields for (the zone card sends those). The update and screen-lock
+// commands have their own Super Admin UI on the server page.
 const DIALOG_COMMAND_TYPES = COMMAND_TYPES.filter(
-  (t) => !["REBOOT_SERVER", "FORGET_SERVER", "SET_EQ", "SET_VOLUME"].includes(t)
+  (t) =>
+    !["REBOOT_SERVER", "FORGET_SERVER", "SET_EQ", "SET_VOLUME", "UPDATE_SOFTWARE", "UNLOCK_SCREEN", "SET_LOCK_PASSWORD"].includes(t)
 )
 
 export function SendCommandDialog() {

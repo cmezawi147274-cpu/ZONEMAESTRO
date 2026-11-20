@@ -117,3 +117,24 @@ so **do not run more than one backend replica** without moving it to Redis):
 - data retention — 6 h (activity 90d, commands 90d, logs 30d, alerts 90d, audit 400d)
 - orphaned-media reconcile — 24 h, 24 h grace, refuses to run if the Track table reads empty
 - prayer scheduler — fires venue pauses server-side
+
+## Publishing a remote update
+
+Only with the owner's explicit permission: a published update reaches every
+venue PC whose agent has remote updates on (agent 2026.11.20 or later).
+
+1. Build and sign into a staging folder (nothing is published yet):
+   `node ops/publish-update.mjs build --agent-dir <kit>/3-CONNECT-TO-CLOUD [--music-server-dir <dir with Service\ and PlaybackHost\> --music-server-version 1.0.15] --out /root/update-staging`
+   Keep the staging folder outside the repo (public on GitHub; big zips break pushes).
+   The Music Server version must equal `Service\MusicServer.Service.exe`'s FileVersion (checked).
+   The key defaults to `/root/cmmp-update-signing/private.pem`; never copy it.
+   The build bumps nothing: set the version in the agent's `package.json` first.
+2. Inspect `/root/update-staging/manifest.signed.json` and `unzip -l /root/update-staging/files/*.zip`.
+3. Publish (files first, manifest switched last):
+   `node ops/publish-update.mjs publish --from /root/update-staging --dest /opt/CMMP/downloads/updates`
+   The backend sees it at `/app/data/downloads/updates` through the read-only
+   bind mount; no restart. Old zips are never deleted, and a zip name already
+   published with other bytes is refused: rebuild with a new version.
+
+**Withdraw:** rename `/opt/CMMP/downloads/updates/manifest.signed.json` away.
+Agents then get 404 = nothing published. PCs already updated stay updated.

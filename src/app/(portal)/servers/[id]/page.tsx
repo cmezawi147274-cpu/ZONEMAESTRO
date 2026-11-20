@@ -24,6 +24,8 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { ServerQuickActions } from "@/components/servers/server-quick-actions"
+import { ServerRemoteActions } from "@/components/servers/server-remote-actions"
+import { ServerHealthCard } from "@/components/servers/server-health-card"
 import { CommandHistory } from "@/components/servers/command-history"
 import { ServerSyncTable } from "@/components/servers/server-sync-table"
 import { ServerPrayerCard } from "@/components/servers/server-prayer-card"
@@ -192,6 +194,7 @@ export default function ServerDetailPage(props: PageProps<"/servers/[id]">) {
       </div>
 
       <ServerQuickActions server={server} />
+      <ServerRemoteActions server={server} />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card>
@@ -314,6 +317,10 @@ export default function ServerDetailPage(props: PageProps<"/servers/[id]">) {
           </div>
         </CardContent>
       </Card>
+
+      <RoleGate permission="server:forget">
+        <ServerHealthCard server={server} />
+      </RoleGate>
 
       <Tabs defaultValue="zones">
         <TabsList className="max-w-full justify-start overflow-x-auto overflow-y-hidden [scrollbar-width:none]">

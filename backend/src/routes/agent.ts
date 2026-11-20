@@ -26,16 +26,18 @@ import { pushActivity } from "../lib/activity.js"
 import { MUSIC_SERVER_HUB_PATH } from "../agent/signalrHub.js"
 import { isValidTimeZone } from "../lib/geo.js"
 import { signedMediaUrl } from "../lib/media-url.js"
-import { agentSupportsRepeatOnce, crossfadeHeld, endMarkersToOffer, expandZoneSlots, onceSongOf, repeatOnceContext, withoutEndMarkers, type ServedSlot } from "../lib/repeat-once.js"
+import { agentPlaysOnceNatively, agentSupportsRepeatOnce, crossfadeHeld, endMarkersToOffer, expandZoneSlots, onceSongOf, repeatOnceContext, withoutEndMarkers, type ServedSlot } from "../lib/repeat-once.js"
 import { noteZoneReport } from "../lib/repeat-once-watch.js"
 import { audit, scheduleRecords } from "../lib/audit.js"
 import { noteStateLoss, noteZoneStates, noteZonesMissing } from "../lib/zone-watchdog.js"
 import { ZONE_TRANSPORT_TYPES } from "./commands.js"
 import { ZONE_EFFECT_FIELD } from "../lib/zone-effects.js"
 import { toZoneCrossfade, toMusicServer } from "../lib/serialize.js"
-import { notePlaylistSync, clockCheckSlots, clockCheckCommands, clockCheckAck, setClockCheckHooks, restoreClockEstimate, pcClockFor } from "../lib/pc-clock.js"
+import { notePlaylistSync, clockCheckSlots, clockCheckCommands, clockCheckAck, setClockCheckHooks, restoreClockEstimate, pcClockFor, noteDirectClock } from "../lib/pc-clock.js"
 import { loadPcClockEstimates, savePcClockEstimate } from "../lib/pc-clock-store.js"
 import type { CommandStatus, Prisma, ZonePlaybackState } from "@prisma/client"
+import { sanitizeHealth, sanitizePcClock, sanitizeUpdate } from "../lib/agent-reports.js"
+import { registerUpdateRoutes } from "./agent-update.js"
 
 /** ASP.NET model binding is case-insensitive; the compiled agent's own
  * JSON casing was never decompiled, so every field this route reads is
@@ -122,6 +124,7 @@ export default async function agentRoutes(app: FastifyInstance) {
   app.addHook("preHandler", async () => {
     if (!env.musicServerAgentAllowed) throw new HttpError(503, "AGENT_DISABLED", "Windows MusicServer agent integration is disabled on this backend.")
   })
+  registerUpdateRoutes(app, p, requireAgent)
 
   // Every agent request carries `X-Request-Id: vk-<hex>` and logs it
   // locally to agent.log — this is the only thing that lets a support
@@ -336,6 +339,10 @@ export default async function agentRoutes(app: FastifyInstance) {
 
     const wasOffline = ctx.server.status === "OFFLINE" || ctx.server.status === "UNKNOWN"
     const reportedTimezone = validTimeZoneOrNull(str(body, "timezone", "timeZone"))
+    const health = sanitizeHealth(field(body, "health"))
+    const updateStatus = sanitizeUpdate(field(body, "update"))
+    const pcClock = sanitizePcClock(field(body, "pcClock"))
+    if (pcClock) noteDirectClock(ctx.serverId, pcClock, Date.now())
     const updated = await prisma.musicServer.update({
       where: { id: ctx.serverId },
       data: {
@@ -347,7 +354,7 @@ export default async function agentRoutes(app: FastifyInstance) {
         diskPercent: num(body, "diskPercent") ?? ctx.server.diskPercent,
         diskFreeGb: num(body, "diskFreeGb") ?? ctx.server.diskFreeGb,
         diskTotalGb: num(body, "diskTotalGb") ?? ctx.server.diskTotalGb,
-        cachedTracks: withoutEndMarkersOrUndefined(ctx.serverId, num(body, "cachedTracks")) ?? ctx.server.cachedTracks,
+        cachedTracks: (agentPlaysOnceNatively(str(body, "serverVersion")) ? num(body, "cachedTracks") : withoutEndMarkersOrUndefined(ctx.serverId, num(body, "cachedTracks"))) ?? ctx.server.cachedTracks,
         cachedSizeGb: num(body, "cachedSizeGb") ?? ctx.server.cachedSizeGb,
         ipAddress: str(body, "ipAddress") ?? ctx.server.ipAddress,
         autoBootEnabled: bool(body, "autoBootEnabled") ?? ctx.server.autoBootEnabled,
@@ -363,6 +370,8 @@ export default async function agentRoutes(app: FastifyInstance) {
         // them. An agent that doesn't send them leaves these null, and the
         // venue's city is looked up instead — 0,0 is never written here.
         ...coordinateUpdate(body, ctx.server),
+        ...(health ? { agentHealth: health as Prisma.InputJsonValue, agentHealthAt: new Date() } : {}),
+        ...(updateStatus ? { agentUpdate: updateStatus as Prisma.InputJsonValue, agentUpdateAt: new Date() } : {}),
       },
     })
     markAgentSeen(ctx.serverId)

@@ -14,6 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Skeleton } from "@/components/ui/skeleton"
 import { Progress } from "@/components/ui/progress"
 import { RegisterServerDialog } from "@/components/servers/register-server-dialog"
+import { UpdateAllOutdatedButton } from "@/components/servers/update-all-outdated-button"
 import { useServers } from "@/hooks/use-servers"
 import { useLocations } from "@/hooks/use-locations"
 import { formatRelativeTime } from "@/lib/format"
@@ -41,9 +42,14 @@ export default function ServersPage() {
         title="Music Servers"
         description="Windows MusicServer instances connected to the cloud — one per location, each with its own audio zones and local cache."
         actions={
-          <RoleGate permission="server:pair">
-            <RegisterServerDialog />
-          </RoleGate>
+          <div className="flex flex-wrap items-center gap-2">
+            <RoleGate permission="server:forget">
+              <UpdateAllOutdatedButton servers={servers ?? []} />
+            </RoleGate>
+            <RoleGate permission="server:pair">
+              <RegisterServerDialog />
+            </RoleGate>
+          </div>
         }
       />
 

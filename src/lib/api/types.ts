@@ -130,6 +130,41 @@ export interface MusicServer {
   reportedLocationAt: string | null
   pcClockWallMs?: number | null
   pcClockMeasuring?: boolean
+  health?: AgentHealth | null
+  healthReportedAt?: string | null
+  updateStatus?: AgentUpdateStatus | null
+  updateStatusAt?: string | null
+  remoteUpdateCapable?: boolean
+  updateAvailable?: boolean
+  publishedUpdate?: { agentVersion: string | null; musicServerVersion: string | null } | null
+  screenLockInstalled?: boolean | null
+}
+
+export interface AgentHealth {
+  uptimeSeconds?: number
+  musicServerVersion?: string
+  bootTime?: string
+  bootReason?: string
+  lastSleep?: { at: string; reason: string | null } | null
+  dvs?: { ok: boolean; devices: string[] } | null
+  disk?: { drive: string; freeBytes: number; totalBytes: number; low: boolean }
+  screenLock?: { installed: boolean }
+}
+
+export interface AgentUpdateStatus {
+  enabled?: boolean
+  auto?: boolean
+  state?: "idle" | "checking" | "downloading" | "updating-music-server" | "restarting" | "error"
+  available?: { agent: string | null; musicServer: string | null }
+  checkedAt?: string
+  error?: string
+  lastResult?: {
+    version: string
+    fromVersion: string | null
+    outcome: "committed" | "rolled-back"
+    reason?: string
+    at: string
+  }
 }
 
 /** Snapshot of a zone's playback captured right before an automatic

@@ -21,9 +21,12 @@ import type {
   PrayerConfig as DbPrayerConfig,
 } from "@prisma/client"
 import { env } from "./env.js"
-import { agentVersionStatus } from "./version.js"
+import { agentVersionStatus, isVersionBelow } from "./version.js"
 import { latestAgentVersion } from "./installer-version.js"
 import { pcClockFor } from "./pc-clock.js"
+import { publishedUpdate, REMOTE_UPDATE_MIN_AGENT_VERSION } from "./update-manifest.js"
+import type { AgentHealth, AgentUpdateStatus } from "./agent-reports.js"
+import { redactCommandPayload } from "./lock-password.js"
 
 const LATEST_KIT_REPORTING_1_0_0 = new Set([
   "cmvgiz3zg096qtb01k1a6ln6k",
@@ -83,6 +86,10 @@ export function toLocation(l: DbLocation, serverCount: number, zoneCount: number
 export function toMusicServer(s: DbMusicServer, zoneCount: number, pendingSyncJobs: number) {
   const latest = latestAgentVersion()
   const pcClock = pcClockFor(s.id, s.reportedTimezone)
+  const health = (s.agentHealth as AgentHealth | null) ?? null
+  const updateStatus = (s.agentUpdate as AgentUpdateStatus | null) ?? null
+  const published = publishedUpdate()
+  const remoteUpdateCapable = agentVersionStatus(s.version, REMOTE_UPDATE_MIN_AGENT_VERSION) === "current" && updateStatus?.enabled === true
   return {
     id: s.id,
     name: s.name,
@@ -132,6 +139,17 @@ export function toMusicServer(s: DbMusicServer, zoneCount: number, pendingSyncJo
     reportedLocationAt: s.reportedLocationAt ? s.reportedLocationAt.toISOString() : null,
     pcClockWallMs: pcClock.wallMs,
     pcClockMeasuring: pcClock.measuring,
+    health,
+    healthReportedAt: s.agentHealthAt ? s.agentHealthAt.toISOString() : null,
+    updateStatus,
+    updateStatusAt: s.agentUpdateAt ? s.agentUpdateAt.toISOString() : null,
+    remoteUpdateCapable,
+    updateAvailable:
+      remoteUpdateCapable &&
+      !!published &&
+      (isVersionBelow(s.version, published.agentVersion) || isVersionBelow(health?.musicServerVersion, published.musicServerVersion)),
+    publishedUpdate: published,
+    screenLockInstalled: health?.screenLock?.installed ?? null,
   }
 }
 
@@ -302,7 +320,7 @@ export function toRemoteCommand(c: DbRemoteCommand, issuedByDisplay: string) {
     serverId: c.serverId,
     zoneId: c.zoneId,
     type: c.type,
-    payload: (c.payload as Record<string, unknown> | null) ?? undefined,
+    payload: redactCommandPayload(c.type, (c.payload as Record<string, unknown> | null) ?? undefined),
     status: c.status,
     issuedBy: issuedByDisplay,
     issuedAt: c.issuedAt.toISOString(),
